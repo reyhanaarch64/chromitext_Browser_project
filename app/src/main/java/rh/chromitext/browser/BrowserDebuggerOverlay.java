@@ -114,7 +114,7 @@ public class BrowserDebuggerOverlay {
         button.setTextColor(Color.WHITE);
         button.setTextSize(18);
         button.setGravity(Gravity.CENTER);
-        button.setContentDescription("Buka Developer Tools");
+        button.setContentDescription(LanguageManager.get("accessibility.open_developer_tools", "Buka Developer Tools"));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(accentColor);
         bg.setCornerRadius(dp(28));
@@ -193,13 +193,13 @@ public class BrowserDebuggerOverlay {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(10), 0, dp(5), 0);
         TextView title = new TextView(activity);
-        title.setText("Developer Tools"); title.setTextColor(textColor); title.setTextSize(14);
+        title.setText(LanguageManager.get("status.developer.tools", "Developer Tools")); title.setTextColor(textColor); title.setTextSize(14);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         header.addView(title, new LinearLayout.LayoutParams(0, dp(38), 1));
-        TextView copyAll = actionText("⧉", "Salin");
+        TextView copyAll = actionText("⧉", LanguageManager.get("action.copy_all_content", "Salin"));
         header.addView(copyAll, new LinearLayout.LayoutParams(dp(42), dp(36)));
-        copyAll.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { copyText(currentCopyText, "Konten " + currentModule + " disalin"); } });
-        TextView close = actionText("×", "Tutup"); close.setTextSize(22);
+        copyAll.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { copyText(currentCopyText, LanguageManager.format("debugger.copy_module_toast", "Konten %1$s disalin", displayModuleName(currentModule))); } });
+        TextView close = actionText("×", LanguageManager.get("action.close", "Tutup")); close.setTextSize(22);
         header.addView(close, new LinearLayout.LayoutParams(dp(38), dp(36)));
         close.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { hidePanel(); } });
         panel.addView(header, new LinearLayout.LayoutParams(-1, dp(38)));
@@ -219,7 +219,7 @@ public class BrowserDebuggerOverlay {
             TextView icon = new TextView(activity); FontAwesome.apply(activity, icon, "solid", iconCode, "•");
             icon.setTextColor(module.equals(currentModule) ? accentColor : mutedColor); icon.setTextSize(13); icon.setGravity(Gravity.CENTER);
             tab.addView(icon, new LinearLayout.LayoutParams(dp(20), dp(34)));
-            TextView label = new TextView(activity); label.setText(module); label.setTextColor(textColor); label.setTextSize(11);
+            TextView label = new TextView(activity); label.setText(displayModuleName(module)); label.setTextColor(textColor); label.setTextSize(11);
             label.setGravity(Gravity.CENTER);
             tab.addView(label, new LinearLayout.LayoutParams(-2, dp(34)));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(34)); lp.leftMargin = dp(3); lp.rightMargin = dp(3);
@@ -240,6 +240,16 @@ public class BrowserDebuggerOverlay {
         refreshPanelContent();
     }
 
+    private String displayModuleName(String module) {
+        if ("Console".equals(module)) return LanguageManager.get("debugger.module.console", "Console");
+        if ("Network".equals(module)) return LanguageManager.get("debugger.module.network", "Network");
+        if ("Storage".equals(module)) return LanguageManager.get("debugger.module.storage", "Storage");
+        if ("Source".equals(module)) return LanguageManager.get("debugger.module.source", "Source");
+        if ("Elements".equals(module)) return LanguageManager.get("debugger.module.elements", "Elements");
+        if ("Info".equals(module)) return LanguageManager.get("debugger.module.info", "Info");
+        return module;
+    }
+
     private TextView actionText(String text, String description) {
         TextView v = new TextView(activity); v.setText(text); v.setTextColor(textColor); v.setTextSize(16);
         v.setGravity(Gravity.CENTER); v.setContentDescription(description); v.setBackground(background(cardColor, borderColor, 6));
@@ -250,8 +260,8 @@ public class BrowserDebuggerOverlay {
         if (!isPanelVisible() || contentList == null) return;
         contentList.removeAllViews();
         BrowserTab tab = host.getActiveTab();
-        if (tab == null) { addPlainCard("Tidak ada tab aktif.", mutedColor); return; }
-        if (firstEnabledModule().length() == 0) { addPlainCard("Semua modul dinonaktifkan. Aktifkan modul melalui Pengaturan > Debugging.", mutedColor); return; }
+        if (tab == null) { addPlainCard(LanguageManager.get("message.tidak.ada.tab.aktif", "Tidak ada tab aktif."), mutedColor); return; }
+        if (firstEnabledModule().length() == 0) { addPlainCard(LanguageManager.get("message.semua.modul.dinonaktifkan.aktifkan.modul.m", "Semua modul dinonaktifkan. Aktifkan modul melalui Pengaturan > Debugging."), mutedColor); return; }
         if (!database.isDebuggerModuleEnabled(currentModule)) currentModule = firstEnabledModule();
         if ("Console".equals(currentModule)) renderConsole(tab);
         else if ("Network".equals(currentModule)) renderNetwork(tab);
@@ -266,7 +276,7 @@ public class BrowserDebuggerOverlay {
     private void renderConsole(BrowserTab tab) {
         final List<String> logs = snapshot(tab, true);
         StringBuilder copy = new StringBuilder();
-        if (logs.size() == 0) { currentCopyText = ""; addPlainCard("Belum ada output Console.", mutedColor); return; }
+        if (logs.size() == 0) { currentCopyText = ""; addPlainCard(LanguageManager.get("message.belum.ada.output.console", "Belum ada output Console."), mutedColor); return; }
         for (int i = 0; i < logs.size(); i++) {
             final String line = logs.get(i); copy.append(line).append('\n');
             int color = consoleColor(line);
@@ -276,8 +286,8 @@ public class BrowserDebuggerOverlay {
             row.addView(mark, new LinearLayout.LayoutParams(dp(48), -2));
             TextView text = new TextView(activity); text.setText(line); text.setTextColor(textColor); text.setTextSize(11); text.setTypeface(Typeface.MONOSPACE); text.setTextIsSelectable(true);
             row.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
-            TextView cp = actionText("⧉", "Salin entri Console"); row.addView(cp, new LinearLayout.LayoutParams(dp(30), dp(30)));
-            cp.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { copyText(line, "Entri Console disalin"); } });
+            TextView cp = actionText("⧉", LanguageManager.get("debugger.copy_console_entry", "Salin entri Console")); row.addView(cp, new LinearLayout.LayoutParams(dp(30), dp(30)));
+            cp.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { copyText(line, LanguageManager.get("debugger.console_entry_copied", "Entri Console disalin")); } });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(5); contentList.addView(row, lp);
         }
         currentCopyText = copy.toString();
@@ -293,19 +303,19 @@ public class BrowserDebuggerOverlay {
     }
 
     private String levelLabel(String value) {
-        if (value == null) return "LOG";
+        if (value == null) return LanguageManager.get("debugger.level.log", "LOG");
         String upper = value.toUpperCase(java.util.Locale.US);
-        if (upper.startsWith("[ERROR]") || upper.contains("[WEB ERROR]")) return "ERROR";
-        if (upper.startsWith("[WARNING]") || upper.startsWith("[WARN]")) return "WARN";
-        if (upper.startsWith("[TIP]")) return "TIP";
-        if (upper.startsWith("[DEBUG]")) return "DEBUG";
-        if (upper.startsWith("[INFO]")) return "INFO";
-        return "LOG";
+        if (upper.startsWith("[ERROR]") || upper.contains("[WEB ERROR]")) return LanguageManager.get("debugger.level.error", "ERROR");
+        if (upper.startsWith("[WARNING]") || upper.startsWith("[WARN]")) return LanguageManager.get("debugger.level.warn", "WARN");
+        if (upper.startsWith("[TIP]")) return LanguageManager.get("debugger.level.tip", "TIP");
+        if (upper.startsWith("[DEBUG]")) return LanguageManager.get("debugger.level.debug", "DEBUG");
+        if (upper.startsWith("[INFO]")) return LanguageManager.get("debugger.level.info", "INFO");
+        return LanguageManager.get("debugger.level.log", "LOG");
     }
 
     private void renderNetwork(BrowserTab tab) {
         List<String> logs = snapshot(tab, false);
-        if (logs.size() == 0) { currentCopyText = ""; addPlainCard("Belum ada request yang teramati. Request awal halaman mungkin tidak tercatat jika debugger diaktifkan setelah halaman dimuat.", mutedColor); return; }
+        if (logs.size() == 0) { currentCopyText = ""; addPlainCard(LanguageManager.get("message.belum.ada.request.yang.teramati.request.aw", "Belum ada request yang teramati. Request awal halaman mungkin tidak tercatat jika debugger diaktifkan setelah halaman dimuat."), mutedColor); return; }
         StringBuilder all = new StringBuilder();
         for (int i = logs.size() - 1; i >= 0; i--) {
             final String raw = logs.get(i); all.append(raw).append("\n\n");
@@ -316,7 +326,7 @@ public class BrowserDebuggerOverlay {
             }
             final JSONObject request = object;
             String method = object.optString("method", "GET").toUpperCase(java.util.Locale.US);
-            String url = object.optString("url", "(URL tidak tersedia)");
+            String url = object.optString("url", LanguageManager.get("debugger.url_unavailable", "(URL tidak tersedia)"));
             String domain = url;
             String path = url;
             try { Uri uri = Uri.parse(url); domain = uri.getHost() == null ? url : uri.getHost(); path = uri.getEncodedPath(); if (path == null || path.length() == 0) path = "/"; }
@@ -331,7 +341,7 @@ public class BrowserDebuggerOverlay {
             TextView statusView = text(status < 0 ? "—" : String.valueOf(status), statusColor, 11, true); statusView.setGravity(Gravity.CENTER); statusView.setTypeface(Typeface.DEFAULT, Typeface.BOLD); top.addView(statusView, new LinearLayout.LayoutParams(dp(44), -2));
             card.addView(top);
             TextView urlView = text(path, mutedColor, 10, true); urlView.setPadding(0, dp(5), 0, dp(2)); urlView.setTextIsSelectable(true); card.addView(urlView);
-            String ms = object.has("ms") ? object.optString("ms") + " ms" : "durasi tidak tersedia";
+            String ms = object.has("ms") ? object.optString("ms") + " ms" : LanguageManager.get("debugger.duration_unavailable", "durasi tidak tersedia");
             TextView meta = text(ms + (object.optString("statusText").length() > 0 ? " · " + object.optString("statusText") : ""), mutedColor, 10, false); card.addView(meta);
             card.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { showNetworkDetails(request); } });
             card.setFocusable(true); card.setClickable(true);
@@ -352,10 +362,10 @@ public class BrowserDebuggerOverlay {
         try { details = request.toString(2); } catch (Exception ignored) { details = request.toString(); }
         final TextView body = text(details, textColor, 11, true); body.setTypeface(Typeface.MONOSPACE); body.setTextIsSelectable(true); body.setPadding(dp(12), dp(10), dp(12), dp(10));
         ScrollView scroll = new ScrollView(activity); scroll.addView(body);
-        new AlertDialog.Builder(activity).setTitle("Network Request Details")
+        new AlertDialog.Builder(activity).setTitle(LanguageManager.get("dialog.title.network.request.details", "Network Request Details"))
             .setView(scroll)
-            .setPositiveButton("Salin Detail", new android.content.DialogInterface.OnClickListener() { public void onClick(android.content.DialogInterface dialog, int which) { copyText(details, "Detail request disalin"); } })
-            .setNegativeButton("Tutup", null).show();
+            .setPositiveButton(LanguageManager.get("action.salin.detail", "Salin Detail"), new android.content.DialogInterface.OnClickListener() { public void onClick(android.content.DialogInterface dialog, int which) { copyText(details, LanguageManager.get("debugger.request_details_copied", "Detail request disalin")); } })
+            .setNegativeButton(LanguageManager.get("action.close", "Tutup"), null).show();
     }
 
     private int methodColor(String method) {
@@ -368,12 +378,12 @@ public class BrowserDebuggerOverlay {
 
     private void renderStorage(final BrowserTab tab) {
         String cookies = CookieManager.getInstance().getCookie(tab.url);
-        final String start = "URL\n" + safe(tab.url) + "\n\nCookie (CookieManager)\n" + (cookies == null ? "(kosong)" : cookies) + "\n\nMemuat localStorage dan sessionStorage...";
+        final String start = LanguageManager.format("debugger.storage_details", "URL\n%1$s\n\nCookie (CookieManager)\n%2$s\n\nMemuat localStorage dan sessionStorage...", safe(tab.url), cookies == null ? LanguageManager.get("debugger.empty_value", "(kosong)") : cookies);
         currentCopyText = start; addPlainCard(start, textColor);
         if (tab.webView != null) tab.webView.evaluateJavascript("(function(){var o={};try{o.localStorage=JSON.stringify(localStorage);o.sessionStorage=JSON.stringify(sessionStorage);o.documentCookie=document.cookie;}catch(e){o.error=String(e)}return JSON.stringify(o)})()", new ValueCallback<String>() {
             public void onReceiveValue(String value) {
                 if (isPanelVisible() && "Storage".equals(currentModule)) {
-                    String result = start + "\n\nPage Storage\n" + decodeEvaluateResult(value);
+                    String result = start + "\n\n" + LanguageManager.get("debugger.page_storage", "Page Storage") + "\n" + decodeEvaluateResult(value);
                     currentCopyText = result; contentList.removeAllViews(); addPlainCard(result, textColor);
                 }
             }
@@ -381,12 +391,12 @@ public class BrowserDebuggerOverlay {
     }
 
     private void renderSource(final BrowserTab tab) {
-        currentCopyText = "Memuat DOM source..."; addPlainCard(currentCopyText, mutedColor);
+        currentCopyText = LanguageManager.get("debugger.loading_source", "Memuat DOM source..."); addPlainCard(currentCopyText, mutedColor);
         if (tab.webView != null) tab.webView.evaluateJavascript("(function(){return document.documentElement?document.documentElement.outerHTML:'(documentElement tidak tersedia)'})()", new ValueCallback<String>() {
             public void onReceiveValue(String value) {
                 if (isPanelVisible() && "Source".equals(currentModule)) {
                     String source = decodeEvaluateResult(value);
-                    if (source.length() > 150000) source = source.substring(0, 150000) + "\n\n[source dipotong pada 150.000 karakter]";
+                    if (source.length() > 150000) source = source.substring(0, 150000) + "\n\n" + LanguageManager.get("debugger.source_truncated", "[source dipotong pada 150.000 karakter]");
                     currentCopyText = source; contentList.removeAllViews();
                     TextView view = text(source, textColor, 10, true); view.setTypeface(Typeface.MONOSPACE); view.setTextIsSelectable(true); view.setPadding(dp(9), dp(8), dp(9), dp(10));
                     view.setBackground(background(cardColor, borderColor, 6)); contentList.addView(view, new LinearLayout.LayoutParams(-1, -2));
@@ -396,7 +406,7 @@ public class BrowserDebuggerOverlay {
     }
 
     private void renderElements(final BrowserTab tab) {
-        currentCopyText = "Mengambil ringkasan DOM..."; addPlainCard(currentCopyText, mutedColor);
+        currentCopyText = LanguageManager.get("debugger.loading_elements", "Mengambil ringkasan DOM..."); addPlainCard(currentCopyText, mutedColor);
         if (tab.webView != null) tab.webView.evaluateJavascript("(function(){return 'documentElement: '+(document.documentElement?document.documentElement.tagName:'none')+'\\nbody children: '+(document.body?document.body.children.length:0)+'\\nurl: '+location.href})()", new ValueCallback<String>() {
             public void onReceiveValue(String value) {
                 if (isPanelVisible() && "Elements".equals(currentModule)) { currentCopyText = decodeEvaluateResult(value); contentList.removeAllViews(); addPlainCard(currentCopyText, textColor); }
@@ -429,12 +439,12 @@ public class BrowserDebuggerOverlay {
     }
 
     private void copyText(String value, String notice) {
-        if (value == null || value.length() == 0) { android.widget.Toast.makeText(activity, "Tidak ada teks untuk disalin.", android.widget.Toast.LENGTH_SHORT).show(); return; }
+        if (value == null || value.length() == 0) { android.widget.Toast.makeText(activity, LanguageManager.get("debugger.nothing_to_copy", "Tidak ada teks untuk disalin."), android.widget.Toast.LENGTH_SHORT).show(); return; }
         try {
             ClipboardManager clipboard = (ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE);
             clipboard.setPrimaryClip(ClipData.newPlainText("Chromitext Developer Tools", value));
             android.widget.Toast.makeText(activity, notice, android.widget.Toast.LENGTH_SHORT).show();
-        } catch (Exception error) { android.widget.Toast.makeText(activity, "Gagal menyalin teks.", android.widget.Toast.LENGTH_SHORT).show(); }
+        } catch (Exception error) { android.widget.Toast.makeText(activity, LanguageManager.get("debugger.copy_failed", "Gagal menyalin teks."), android.widget.Toast.LENGTH_SHORT).show(); }
     }
 
     private String firstEnabledModule() {

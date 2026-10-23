@@ -8,8 +8,9 @@ public class BrowserTab {
     public WebView webView;
     public String url = "about:blank";
     public volatile String bridgeUrl = "about:blank";
-    public String title = "tab baru";
+    public String title = LanguageManager.get("tabs.new_tab", "Tab Baru");
     public boolean loading = false;
+    public boolean sslCertificateError = false;
     public volatile boolean extensionReloadPending = false;
     public final List<String> consoleLogs = new ArrayList<String>();
     public final List<String> networkLogs = new ArrayList<String>();

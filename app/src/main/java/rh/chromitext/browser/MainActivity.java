@@ -73,32 +73,30 @@ import java.net.URL;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-public class MainActivity extends Activity implements ExtensionHost {
+public class MainActivity extends Activity implements ExtensionHost, AddressSuggestionController.Host, BrowserLibraryPagesController.Host {
     private static final int REQUEST_INSTALL_ZIP = 7101;
     private static final int REQUEST_WEB_FILE = 7102;
     private static final String DEBUG_NETWORK_PREFIX = "__CHROMITEXT_NET__";
     private static final int REQUEST_STORAGE_PERMISSION = 7103;
-    private int COLOR_PANEL = Color.rgb(214, 211, 204);
-    private int COLOR_BUTTON = Color.rgb(235, 232, 224);
-    private int COLOR_BORDER = Color.rgb(139, 136, 128);
-    private int COLOR_TEXT = Color.rgb(30, 30, 30);
-    private int COLOR_ACCENT = Color.rgb(36, 92, 132);
-    private boolean darkTheme;
-    private int configuredSearchHeight = 42;
-    private int configuredToolbarHeight = 42;
-    private int configuredIconSize = 15;
-    private int configuredToolbarGap = 1;
-    private boolean searchAtBottom;
+    int COLOR_PANEL = Color.rgb(214, 211, 204);
+    int COLOR_BUTTON = Color.rgb(235, 232, 224);
+    int COLOR_BORDER = Color.rgb(139, 136, 128);
+    int COLOR_TEXT = Color.rgb(30, 30, 30);
+    int COLOR_ACCENT = Color.rgb(36, 92, 132);
+    boolean darkTheme;
+    int configuredSearchHeight = 42;
+    int configuredToolbarHeight = 42;
+    int configuredIconSize = 15;
+    int configuredToolbarGap = 1;
+    boolean searchAtBottom;
 
     private LinearLayout rootLayout;
     private FrameLayout appFrame;
@@ -108,7 +106,7 @@ public class MainActivity extends Activity implements ExtensionHost {
     private final ArrayList<View> pageStack = new ArrayList<View>();
     private BrowserDebuggerOverlay debuggerOverlay;
     private BrowserPageLayout browserPageLayout;
-    private boolean debuggerEnabled;
+    boolean debuggerEnabled;
     private boolean customViewActive;
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
@@ -118,17 +116,16 @@ public class MainActivity extends Activity implements ExtensionHost {
     private static final int REQUEST_WEB_PERMISSION = 7120;
     private static final int REQUEST_GEO_PERMISSION = 7121;
     private EditText addressBar;
+    private TextView securityLockButton;
     private TextView clearAddressButton;
     private LinearLayout addressRowView;
-    private PopupWindow addressSuggestionPopup;
-    private LinearLayout addressSuggestionList;
-    private final Handler addressSuggestionHandler = new Handler(Looper.getMainLooper());
-    private Runnable pendingAddressSuggestionTask;
-    private int addressSuggestionRequestId;
+    private AddressSuggestionController addressSuggestionController;
+    private BrowserLibraryPagesController libraryPagesController;
+    private BrowserSettingsUiController settingsUiController;
     private FrameLayout webFrame;
     private TextView statusView;
     private TextView tabSummary;
-    private final List<BrowserTab> tabs = new ArrayList<BrowserTab>();
+    final List<BrowserTab> tabs = new ArrayList<BrowserTab>();
     private final List<RequestBlockRule> requestBlockRules = new CopyOnWriteArrayList<RequestBlockRule>();
     private final List<RequestObserverRule> requestObservers = new CopyOnWriteArrayList<RequestObserverRule>();
     private final List<NavigationObserverRule> navigationObservers = new CopyOnWriteArrayList<NavigationObserverRule>();
@@ -141,19 +138,19 @@ public class MainActivity extends Activity implements ExtensionHost {
     private final Map<Integer, String> localServerOwners = new HashMap<Integer, String>();
     private final List<Object> beanShellInterpreters = new ArrayList<Object>();
     private ExtensionManager extensionManager;
-    private BrowserTab activeTab;
+    BrowserTab activeTab;
     private ValueCallback<Uri[]> fileChooserCallback;
     private ExtensionManager.PreparedInstall pendingInstall;
-    private BrowserDatabase database;
+    BrowserDatabase database;
     private volatile boolean extensionRuntimeLoaded;
     private volatile boolean activityDestroyed;
     private volatile int extensionRuntimeGeneration;
     private final Object extensionRuntimeProcessingLock = new Object();
     private int activeBackgroundWorkCount;
     private boolean databaseClosed;
-    private String globalUserAgentMode = "default";
-    private String customUserAgent = "";
-    private boolean javascriptEnabled = true;
+    String globalUserAgentMode = "default";
+    String customUserAgent = "";
+    boolean javascriptEnabled = true;
 
     private static class RequestBlockRule {
         String extensionId;
@@ -200,23 +197,13 @@ public class MainActivity extends Activity implements ExtensionHost {
         ExtensionBridgeHandler handler;
     }
 
-    private static class AddressSuggestion {
-        String title;
-        String url;
-        boolean history;
-        AddressSuggestion(String title, String url, boolean history) {
-            this.title = title == null ? "" : title;
-            this.url = url == null ? "" : url;
-            this.history = history;
-        }
-    }
-
     @Override
     public void onCreate(Bundle state) {
         super.onCreate(state);
         requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
         database = new BrowserDatabase(this);
         database.migrateLegacyPreferences(this);
+        LanguageManager.load(this, database.getSetting("language", "id_ID"));
         String themeMode = database.getSetting("ui_theme", "system");
         boolean systemDark = false;
         if (Build.VERSION.SDK_INT >= 29) {
@@ -241,6 +228,9 @@ public class MainActivity extends Activity implements ExtensionHost {
         configuredIconSize = readIntSetting("ui_icon_size", 15, 12, 22);
         configuredToolbarGap = readIntSetting("ui_toolbar_gap", 1, 0, 5);
         extensionManager = new ExtensionManager(this, database);
+        addressSuggestionController = new AddressSuggestionController(this);
+        libraryPagesController = new BrowserLibraryPagesController(this);
+        settingsUiController = new BrowserSettingsUiController(this);
         buildUi();
         restoreSessionOrStart();
         // Extension scripts are initialized off the UI thread to avoid ANR/crash on slow OEM devices.
@@ -317,16 +307,29 @@ public class MainActivity extends Activity implements ExtensionHost {
         addressRowView = new LinearLayout(this);
         final LinearLayout addressRow = addressRowView;
         addressRow.setOrientation(LinearLayout.HORIZONTAL);
+        securityLockButton = new TextView(this);
+        securityLockButton.setTextSize(17);
+        securityLockButton.setGravity(Gravity.CENTER);
+        securityLockButton.setTextColor(COLOR_TEXT);
+        securityLockButton.setSingleLine(true);
+        securityLockButton.setPadding(dp(5), 0, dp(5), 0);
+        securityLockButton.setBackground(boxBackground(COLOR_BUTTON, COLOR_BORDER));
+        securityLockButton.setContentDescription(LanguageManager.get("accessibility.connection_security", "Informasi keamanan koneksi"));
+        securityLockButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { showConnectionSecurityInfo(); }
+        });
+        addressRow.addView(securityLockButton, new LinearLayout.LayoutParams(dp(32), dp(configuredSearchHeight)));
         addressBar = new EditText(this);
         addressBar.setSingleLine(true);
         addressBar.setTextSize(Math.max(12, configuredIconSize - 1));
         addressBar.setTextColor(COLOR_TEXT);
         addressBar.setHintTextColor(darkTheme ? Color.rgb(160, 166, 174) : Color.rgb(100, 100, 100));
-        addressBar.setHint("Cari atau masukkan URL");
+        addressBar.setHint(LanguageManager.get("placeholder.search.bar", "Cari atau masukkan URL"));
         addressBar.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         addressBar.setImeOptions(EditorInfo.IME_ACTION_GO);
         addressBar.setPadding(dp(9), 0, dp(7), 0);
         addressBar.setSelectAllOnFocus(true);
+        updateSecurityIndicator("about:blank");
         addressBar.setBackground(boxBackground(darkTheme ? Color.rgb(29, 33, 39) : Color.rgb(255, 255, 255), COLOR_BORDER));
         addressRow.addView(addressBar, new LinearLayout.LayoutParams(0, dp(configuredSearchHeight), 1));
         clearAddressButton = new TextView(this);
@@ -335,14 +338,14 @@ public class MainActivity extends Activity implements ExtensionHost {
         clearAddressButton.setTextColor(COLOR_TEXT);
         clearAddressButton.setGravity(Gravity.CENTER);
         clearAddressButton.setSingleLine(true);
-        clearAddressButton.setContentDescription("Kosongkan address bar");
+        clearAddressButton.setContentDescription(LanguageManager.get("accessibility.clear_address", "Kosongkan address bar"));
         clearAddressButton.setBackground(boxBackground(COLOR_BUTTON, COLOR_BORDER));
         clearAddressButton.setVisibility(View.GONE);
         LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(dp(Math.max(30, configuredSearchHeight - 4)), dp(configuredSearchHeight));
         clearParams.leftMargin = dp(3);
         addressRow.addView(clearAddressButton, clearParams);
         TextView goButton = iconButton("solid", 0xf061, "go", "go");
-        goButton.setContentDescription("Buka Alamat");
+        goButton.setContentDescription(LanguageManager.get("accessibility.open_address", "Buka Alamat"));
         LinearLayout.LayoutParams goParams = new LinearLayout.LayoutParams(dp(configuredSearchHeight), dp(configuredSearchHeight));
         goParams.leftMargin = dp(3);
         addressRow.addView(goButton, goParams);
@@ -376,7 +379,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         // is rendered so the WebView receives the full remaining screen.
         tabSummary = new TextView(this);
         statusView = new TextView(this);
-        statusView.setText("Siap");
+        statusView.setText(LanguageManager.get("status.siap", "Siap"));
 
         appFrame = new FrameLayout(this);
         browserLayer = new FrameLayout(this);
@@ -401,9 +404,9 @@ public class MainActivity extends Activity implements ExtensionHost {
         addressBar.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             public void onFocusChange(View view, boolean hasFocus) {
                 if (hasFocus && browserLayer.getVisibility() == View.VISIBLE) {
-                    scheduleAddressSuggestions(addressBar.getText().toString(), 0);
+                    addressSuggestionController.schedule(addressBar.getText().toString(), 0);
                 } else {
-                    hideAddressSuggestions();
+                    addressSuggestionController.hide();
                 }
             }
         });
@@ -414,9 +417,9 @@ public class MainActivity extends Activity implements ExtensionHost {
                 String text = value == null ? "" : value.toString();
                 if (clearAddressButton != null) clearAddressButton.setVisibility(text.length() > 0 ? View.VISIBLE : View.GONE);
                 if (addressBar.hasFocus() && browserLayer.getVisibility() == View.VISIBLE) {
-                    scheduleAddressSuggestions(text, 300);
+                    addressSuggestionController.schedule(text, 300);
                 } else {
-                    hideAddressSuggestions();
+                    addressSuggestionController.hide();
                 }
             }
         });
@@ -427,230 +430,9 @@ public class MainActivity extends Activity implements ExtensionHost {
                 addressBar.requestFocus();
                 InputMethodManager manager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
                 if (manager != null) manager.showSoftInput(addressBar, InputMethodManager.SHOW_IMPLICIT);
-                scheduleAddressSuggestions("", 0);
+                addressSuggestionController.schedule("", 0);
             }
         });
-    }
-
-    private void scheduleAddressSuggestions(final String rawQuery, int delayMs) {
-        if (pendingAddressSuggestionTask != null) addressSuggestionHandler.removeCallbacks(pendingAddressSuggestionTask);
-        final int requestId = ++addressSuggestionRequestId;
-        pendingAddressSuggestionTask = new Runnable() {
-            public void run() {
-                if (activityDestroyed || addressBar == null || !addressBar.hasFocus() || browserLayer.getVisibility() != View.VISIBLE) return;
-                String query = rawQuery == null ? "" : rawQuery.trim();
-                final ArrayList<AddressSuggestion> local = getHistorySuggestions(query, query.length() == 0 ? 6 : 4);
-                renderAddressSuggestions(local, query);
-                if (query.length() == 0) return;
-                fetchGoogleSuggestions(query, requestId);
-            }
-        };
-        addressSuggestionHandler.postDelayed(pendingAddressSuggestionTask, Math.max(0, delayMs));
-    }
-
-    private ArrayList<AddressSuggestion> getHistorySuggestions(String query, int limit) {
-        ArrayList<AddressSuggestion> result = new ArrayList<AddressSuggestion>();
-        ArrayList<String> lines = readLines("history");
-        Collections.reverse(lines);
-        HashSet<String> seen = new HashSet<String>();
-        String lowerQuery = query == null ? "" : query.toLowerCase(Locale.US);
-        for (int i = 0; i < lines.size() && result.size() < limit; i++) {
-            String[] pair = lines.get(i).split("\t", 2);
-            if (pair.length != 2 || pair[1].length() == 0) continue;
-            String title = pair[0];
-            String url = pair[1];
-            if (seen.contains(url)) continue;
-            if (lowerQuery.length() > 0 && title.toLowerCase(Locale.US).indexOf(lowerQuery) < 0 && url.toLowerCase(Locale.US).indexOf(lowerQuery) < 0) continue;
-            seen.add(url);
-            result.add(new AddressSuggestion(title.length() == 0 ? Uri.parse(url).getHost() : title, url, true));
-        }
-        return result;
-    }
-
-    private void fetchGoogleSuggestions(final String query, final int requestId) {
-        Thread worker = new Thread(new Runnable() {
-            public void run() {
-                HttpURLConnection connection = null;
-                BufferedReader reader = null;
-                final ArrayList<String> values = new ArrayList<String>();
-                try {
-                    String encoded = URLEncoder.encode(query, "UTF-8");
-                    URL endpoint = new URL("https://suggestqueries.google.com/complete/search?client=firefox&q=" + encoded);
-                    connection = (HttpURLConnection) endpoint.openConnection();
-                    connection.setRequestMethod("GET");
-                    connection.setConnectTimeout(2500);
-                    connection.setReadTimeout(2500);
-                    connection.setRequestProperty("Accept", "application/json");
-                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36");
-                    int status = connection.getResponseCode();
-                    if (status >= 200 && status < 300) {
-                        reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), "UTF-8"));
-                        StringBuilder payload = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null && payload.length() < 128000) payload.append(line);
-                        JSONArray root = new JSONArray(payload.toString());
-                        if (root.length() > 1 && root.opt(1) instanceof JSONArray) {
-                            JSONArray suggestions = root.getJSONArray(1);
-                            for (int i = 0; i < suggestions.length() && values.size() < 5; i++) {
-                                String value = suggestions.optString(i, "");
-                                if (value.length() > 0 && !values.contains(value)) values.add(value);
-                            }
-                        }
-                    }
-                } catch (Exception ignored) {
-                    // Search suggestions are optional; local history remains available offline.
-                } finally {
-                    if (reader != null) try { reader.close(); } catch (Exception ignored) { }
-                    if (connection != null) connection.disconnect();
-                }
-                runOnUiThread(new Runnable() {
-                    public void run() {
-                        if (activityDestroyed || requestId != addressSuggestionRequestId || addressBar == null || !addressBar.hasFocus()) return;
-                        String current = addressBar.getText().toString().trim();
-                        if (!current.equals(query)) return;
-                        ArrayList<AddressSuggestion> merged = getHistorySuggestions(query, 4);
-                        HashSet<String> seen = new HashSet<String>();
-                        for (int i = 0; i < merged.size(); i++) {
-                            seen.add(merged.get(i).url.toLowerCase(Locale.US));
-                            seen.add(merged.get(i).title.toLowerCase(Locale.US));
-                        }
-                        for (int i = 0; i < values.size(); i++) {
-                            String value = values.get(i);
-                            String key = value.toLowerCase(Locale.US);
-                            if (!seen.contains(key)) {
-                                merged.add(new AddressSuggestion(value, value, false));
-                                seen.add(key);
-                            }
-                        }
-                        renderAddressSuggestions(merged, query);
-                    }
-                });
-            }
-        }, "Chromitext-SearchSuggestions");
-        worker.setDaemon(true);
-        worker.start();
-    }
-
-    private void renderAddressSuggestions(ArrayList<AddressSuggestion> suggestions, String query) {
-        if (activityDestroyed || addressRowView == null || addressBar == null || !addressBar.hasFocus()) return;
-        if (browserLayer.getVisibility() != View.VISIBLE) { hideAddressSuggestions(); return; }
-        if (suggestions == null || suggestions.size() == 0) {
-            if (addressSuggestionPopup != null) {
-                try { addressSuggestionPopup.dismiss(); } catch (Exception ignored) { }
-                addressSuggestionPopup = null;
-            }
-            addressSuggestionList = null;
-            return;
-        }
-        if (addressSuggestionPopup != null) {
-            try { addressSuggestionPopup.dismiss(); } catch (Exception ignored) { }
-            addressSuggestionPopup = null;
-        }
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(false);
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(0, dp(2), 0, dp(2));
-        panel.setBackground(boxBackground(darkTheme ? Color.rgb(29, 33, 39) : Color.WHITE, COLOR_BORDER));
-        addressSuggestionList = panel;
-        boolean hasHistory = false;
-        for (int i = 0; i < suggestions.size(); i++) if (suggestions.get(i).history) hasHistory = true;
-        boolean dividerAdded = false;
-        for (int i = 0; i < suggestions.size(); i++) {
-            final AddressSuggestion suggestion = suggestions.get(i);
-            if (hasHistory && !suggestion.history && !dividerAdded) {
-                View divider = new View(this);
-                divider.setBackgroundColor(COLOR_BORDER);
-                panel.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
-                TextView label = new TextView(this);
-                label.setText("SARAN GOOGLE");
-                label.setTextColor(darkTheme ? Color.rgb(160, 166, 174) : Color.rgb(100, 100, 100));
-                label.setTextSize(10);
-                label.setPadding(dp(12), dp(5), dp(8), dp(2));
-                panel.addView(label, new LinearLayout.LayoutParams(-1, -2));
-                dividerAdded = true;
-            }
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(11), dp(6), dp(10), dp(6));
-            row.setBackgroundColor(darkTheme ? Color.rgb(29, 33, 39) : Color.WHITE);
-            TextView icon = new TextView(this);
-            FontAwesome.apply(this, icon, "solid", suggestion.history ? 0xf1da : 0xf002, suggestion.history ? "◷" : "⌕");
-            icon.setTextSize(18);
-            icon.setGravity(Gravity.CENTER);
-            icon.setTextColor(suggestion.history ? Color.rgb(22, 133, 232) : (darkTheme ? Color.rgb(170, 177, 187) : Color.rgb(105, 105, 105)));
-            row.addView(icon, new LinearLayout.LayoutParams(dp(28), dp(38)));
-            LinearLayout textColumn = new LinearLayout(this);
-            textColumn.setOrientation(LinearLayout.VERTICAL);
-            TextView heading = new TextView(this);
-            heading.setText(suggestion.title);
-            heading.setTextSize(14);
-            heading.setSingleLine(true);
-            heading.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            heading.setTextColor(suggestion.history ? Color.rgb(22, 133, 232) : COLOR_TEXT);
-            textColumn.addView(heading, new LinearLayout.LayoutParams(-1, -2));
-            TextView detail = new TextView(this);
-            detail.setText(suggestion.history ? suggestion.url : "Cari di Google");
-            detail.setTextSize(11);
-            detail.setSingleLine(true);
-            detail.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-            detail.setTextColor(suggestion.history ? Color.rgb(22, 133, 232) : (darkTheme ? Color.rgb(160, 166, 174) : Color.rgb(100, 100, 100)));
-            textColumn.addView(detail, new LinearLayout.LayoutParams(-1, -2));
-            row.addView(textColumn, new LinearLayout.LayoutParams(0, -2, 1));
-            TextView action = new TextView(this);
-            FontAwesome.apply(this, action, "solid", 0xf0da, "↖");
-            action.setTextSize(16);
-            action.setTextColor(darkTheme ? Color.rgb(160, 166, 174) : Color.rgb(100, 100, 100));
-            action.setGravity(Gravity.CENTER);
-            row.addView(action, new LinearLayout.LayoutParams(dp(28), dp(38)));
-            row.setOnClickListener(new View.OnClickListener() {
-                public void onClick(View view) {
-                    hideAddressSuggestions();
-                    if (suggestion.history) {
-                        hideKeyboard();
-                        navigate(suggestion.url);
-                    } else {
-                        String searchUrl = "https://www.google.com/search?q=" + Uri.encode(suggestion.title);
-                        hideKeyboard();
-                        navigate(searchUrl);
-                    }
-                }
-            });
-            panel.addView(row, new LinearLayout.LayoutParams(-1, -2));
-            if (i < suggestions.size() - 1) {
-                View separator = new View(this);
-                separator.setBackgroundColor(darkTheme ? Color.rgb(55, 60, 68) : Color.rgb(230, 230, 230));
-                panel.addView(separator, new LinearLayout.LayoutParams(-1, dp(1)));
-            }
-        }
-        scroll.addView(panel, new ScrollView.LayoutParams(-1, -2));
-        scroll.setBackgroundColor(darkTheme ? Color.rgb(29, 33, 39) : Color.WHITE);
-        scroll.setLayoutParams(new ViewGroup.LayoutParams(Math.max(dp(220), addressRowView.getWidth()), -2));
-        scroll.measure(View.MeasureSpec.makeMeasureSpec(Math.max(dp(220), addressRowView.getWidth()), View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(dp(500), View.MeasureSpec.AT_MOST));
-        int popupHeight = Math.min(scroll.getMeasuredHeight(), dp(360));
-        if (popupHeight <= 0) popupHeight = dp(120);
-        addressSuggestionPopup = new PopupWindow(scroll, Math.max(dp(220), addressRowView.getWidth()), popupHeight, false);
-        addressSuggestionPopup.setBackgroundDrawable(boxBackground(darkTheme ? Color.rgb(29, 33, 39) : Color.WHITE, COLOR_BORDER));
-        if (Build.VERSION.SDK_INT >= 21) addressSuggestionPopup.setElevation(dp(4));
-        addressSuggestionPopup.setOutsideTouchable(true);
-        addressSuggestionPopup.setTouchable(true);
-        addressSuggestionPopup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
-        addressSuggestionPopup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-        addressSuggestionPopup.showAsDropDown(addressRowView, 0, dp(1));
-    }
-
-    private void hideAddressSuggestions() {
-        if (pendingAddressSuggestionTask != null) {
-            addressSuggestionHandler.removeCallbacks(pendingAddressSuggestionTask);
-            pendingAddressSuggestionTask = null;
-        }
-        addressSuggestionRequestId++;
-        if (addressSuggestionPopup != null) {
-            try { addressSuggestionPopup.dismiss(); } catch (Exception ignored) { }
-            addressSuggestionPopup = null;
-        }
-        addressSuggestionList = null;
     }
 
     private LinearLayout.LayoutParams weightedButtonParams() {
@@ -694,7 +476,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         return button;
     }
 
-    private GradientDrawable boxBackground(int fill, int stroke) {
+    GradientDrawable boxBackground(int fill, int stroke) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(fill);
         drawable.setCornerRadius(0);
@@ -702,9 +484,37 @@ public class MainActivity extends Activity implements ExtensionHost {
         return drawable;
     }
 
-    private int dp(float value) {
+    int dp(float value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
+
+    public Activity libraryActivity() { return this; }
+    public BrowserDatabase libraryDatabase() { return database; }
+    public BrowserTab libraryActiveTab() { return activeTab; }
+    public LinearLayout openLibraryPage(String title) { return openPage(title); }
+    public void addLibraryAction(LinearLayout body, int iconCode, String title, String description, View.OnClickListener listener) { addPageAction(body, iconCode, title, description, listener); }
+    public void addLibraryNote(LinearLayout body, String value) { addPageNote(body, value); }
+    public void navigateFromLibrary(String url) { navigate(url); }
+    public void backFromLibraryPage() { backFromPage(); }
+    public void replaceLibraryPage() { replaceCurrentPage(); }
+    public void showBookmarksPage() { showBookmarks(); }
+    public void showHistoryPage() { showHistory(); }
+    public void showLibraryToast(String message) { showToast(message); }
+
+    public Activity suggestionActivity() { return this; }
+    public BrowserDatabase suggestionDatabase() { return database; }
+    public EditText suggestionAddressBar() { return addressBar; }
+    public View suggestionBrowserLayer() { return browserLayer; }
+    public View suggestionAnchor() { return addressRowView; }
+    public boolean suggestionIsDestroyed() { return activityDestroyed; }
+    public boolean suggestionIsDarkTheme() { return darkTheme; }
+    public int suggestionPanelColor() { return COLOR_PANEL; }
+    public int suggestionBorderColor() { return COLOR_BORDER; }
+    public int suggestionTextColor() { return COLOR_TEXT; }
+    public int suggestionDp(float value) { return dp(value); }
+    public GradientDrawable suggestionBackground(int fill, int stroke) { return boxBackground(fill, stroke); }
+    public void navigateFromSuggestion(String url) { navigate(url); }
+    public void hideKeyboardForSuggestion() { hideKeyboard(); }
 
     private BrowserTab addTab(boolean blank) {
         final BrowserTab tab = new BrowserTab();
@@ -755,10 +565,12 @@ public class MainActivity extends Activity implements ExtensionHost {
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 tab.url = url == null ? "about:blank" : url;
                 tab.bridgeUrl = tab.url;
+                tab.sslCertificateError = false;
                 tab.loading = true;
                 if (activeTab == tab) {
                     addressBar.setText(tab.url);
-                    statusView.setText("memuat: " + tab.url);
+                    updateSecurityIndicator(tab.url);
+                    statusView.setText(LanguageManager.get("status.loading_prefix", "Memuat: ") + tab.url);
                 }
                 updateTabSummary();
             }
@@ -769,7 +581,8 @@ public class MainActivity extends Activity implements ExtensionHost {
                 tab.loading = false;
                 if (activeTab == tab) {
                     addressBar.setText(tab.url);
-                    statusView.setText("selesai dimuat");
+                    updateSecurityIndicator(tab.url);
+                    statusView.setText(LanguageManager.get("status.selesai.dimuat", "selesai dimuat"));
                 }
                 saveHistory(tab.title, tab.url);
                 rememberCurrentOrigin(tab.url);
@@ -794,7 +607,7 @@ public class MainActivity extends Activity implements ExtensionHost {
             @Override
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
                 addDebuggerConsole(tab, "[web error] " + errorCode + " " + description + " | " + failingUrl);
-                if (activeTab == tab) statusView.setText("error: " + description);
+                if (activeTab == tab) statusView.setText(LanguageManager.get("status.error_prefix", "Error: ") + description);
             }
 
             @Override
@@ -802,7 +615,7 @@ public class MainActivity extends Activity implements ExtensionHost {
                 if (Build.VERSION.SDK_INT >= 23 && error != null) {
                     addDebuggerConsole(tab, "[web error] " + error.getErrorCode() + " " + error.getDescription());
                     if (request != null && request.isForMainFrame() && activeTab == tab) {
-                        statusView.setText("error: " + error.getDescription());
+                        statusView.setText(LanguageManager.get("status.error_prefix", "Error: ") + error.getDescription());
                     }
                 }
             }
@@ -811,19 +624,29 @@ public class MainActivity extends Activity implements ExtensionHost {
             public void onReceivedSslError(WebView view, SslErrorHandler handler, android.net.http.SslError error) {
                 addDebuggerConsole(tab, "[ssl error] koneksi dibatalkan: " + String.valueOf(error));
                 handler.cancel();
-                if (activeTab == tab) statusView.setText("sertifikat ssl tidak valid");
+                boolean mainHostCertificateError = false;
+                try {
+                    String pageHost = Uri.parse(tab.url == null ? "" : tab.url).getHost();
+                    String errorHost = error == null ? null : Uri.parse(error.getUrl()).getHost();
+                    mainHostCertificateError = pageHost != null && errorHost != null && pageHost.equalsIgnoreCase(errorHost);
+                } catch (Exception ignored) { }
+                if (mainHostCertificateError) tab.sslCertificateError = true;
+                if (activeTab == tab) {
+                    updateSecurityIndicator(tab.url);
+                    statusView.setText(LanguageManager.get("status.sertifikat.ssl.tidak.valid", "sertifikat ssl tidak valid"));
+                }
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onReceivedTitle(WebView view, String title) {
-                tab.title = title == null || title.length() == 0 ? "tanpa judul" : title;
+                tab.title = title == null || title.length() == 0 ? LanguageManager.get("web.untitled", "tanpa judul") : title;
                 updateTabSummary();
             }
 
             @Override
             public void onProgressChanged(WebView view, int progress) {
-                if (activeTab == tab && tab.loading) statusView.setText("memuat " + progress + "%");
+                if (activeTab == tab && tab.loading) statusView.setText(LanguageManager.get("status.loading", "Memuat...") + " " + progress + "%");
             }
 
             @Override
@@ -844,22 +667,22 @@ public class MainActivity extends Activity implements ExtensionHost {
                 addDebuggerConsole(tab, line);
                 String extensionId = findExtensionIdForSource(sourceId);
                 if (extensionId != null) extensionLog(extensionId, "[javascript] " + line);
-                if (activeTab == tab) statusView.setText("console: " + rawMessage);
+                if (activeTab == tab) statusView.setText(LanguageManager.get("status.console_prefix", "Console: ") + rawMessage);
                 return true;
             }
 
             @Override
             public void onGeolocationPermissionsShowPrompt(final String origin, final GeolocationPermissions.Callback callback) {
-                new AlertDialog.Builder(MainActivity.this).setTitle("Izin Lokasi")
-                    .setMessage(origin + " meminta akses lokasi perangkat. izinkan?")
-                    .setPositiveButton("Izinkan", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) {
+                new AlertDialog.Builder(MainActivity.this).setTitle(LanguageManager.get("dialog.title.izin.lokasi", "Izin Lokasi"))
+                    .setMessage(LanguageManager.format("permission.location.message", "%1$s meminta akses lokasi perangkat. Izinkan?", origin))
+                    .setPositiveButton(LanguageManager.get("action.allow", "Izinkan"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) {
                         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                             pendingGeoCallback = callback;
                             pendingGeoOrigin = origin;
                             requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION}, REQUEST_GEO_PERMISSION);
                         } else callback.invoke(origin, true, false);
                     }})
-                    .setNegativeButton("Tolak", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { callback.invoke(origin, false, false); }})
+                    .setNegativeButton(LanguageManager.get("action.deny", "Tolak"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { callback.invoke(origin, false, false); }})
                     .setOnCancelListener(new DialogInterface.OnCancelListener() { public void onCancel(DialogInterface dialog) { callback.invoke(origin, false, false); }})
                     .show();
             }
@@ -867,9 +690,9 @@ public class MainActivity extends Activity implements ExtensionHost {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 if (Build.VERSION.SDK_INT < 21) { request.deny(); return; }
-                new AlertDialog.Builder(MainActivity.this).setTitle("Izin Website")
-                    .setMessage(String.valueOf(request.getOrigin()) + " meminta akses perangkat: " + java.util.Arrays.toString(request.getResources()) + ". izinkan?")
-                    .setPositiveButton("Izinkan", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) {
+                new AlertDialog.Builder(MainActivity.this).setTitle(LanguageManager.get("dialog.title.izin.website", "Izin Website"))
+                    .setMessage(LanguageManager.format("permission.web.message", "%1$s meminta akses perangkat: %2$s. Izinkan?", String.valueOf(request.getOrigin()), java.util.Arrays.toString(request.getResources())))
+                    .setPositiveButton(LanguageManager.get("action.allow", "Izinkan"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) {
                         ArrayList<String> needed = new ArrayList<String>();
                         String[] resources = request.getResources();
                         for (int i = 0; i < resources.length; i++) {
@@ -881,7 +704,7 @@ public class MainActivity extends Activity implements ExtensionHost {
                             requestPermissions(needed.toArray(new String[needed.size()]), REQUEST_WEB_PERMISSION);
                         } else request.grant(resources);
                     }})
-                    .setNegativeButton("Tolak", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { request.deny(); }})
+                    .setNegativeButton(LanguageManager.get("action.deny", "Tolak"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { request.deny(); }})
                     .setOnCancelListener(new DialogInterface.OnCancelListener() { public void onCancel(DialogInterface dialog) { request.deny(); }})
                     .show();
             }
@@ -913,8 +736,8 @@ public class MainActivity extends Activity implements ExtensionHost {
 
             @Override
             public boolean onJsAlert(WebView view, String url, String message, final JsResult result) {
-                new AlertDialog.Builder(MainActivity.this).setTitle("Pesan dari Halaman")
-                    .setMessage(message).setPositiveButton("OK", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.confirm(); }})
+                new AlertDialog.Builder(MainActivity.this).setTitle(LanguageManager.get("dialog.title.pesan.dari.halaman", "Pesan dari Halaman"))
+                    .setMessage(message).setPositiveButton(LanguageManager.get("action.ok", "OK"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.confirm(); }})
                     .setOnCancelListener(new DialogInterface.OnCancelListener() { public void onCancel(DialogInterface dialog) { result.cancel(); }})
                     .show();
                 return true;
@@ -922,9 +745,9 @@ public class MainActivity extends Activity implements ExtensionHost {
 
             @Override
             public boolean onJsConfirm(WebView view, String url, String message, final JsResult result) {
-                new AlertDialog.Builder(MainActivity.this).setTitle("Konfirmasi Halaman")
-                    .setMessage(message).setPositiveButton("OK", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.confirm(); }})
-                    .setNegativeButton("Batal", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.cancel(); }})
+                new AlertDialog.Builder(MainActivity.this).setTitle(LanguageManager.get("dialog.title.konfirmasi.halaman", "Konfirmasi Halaman"))
+                    .setMessage(message).setPositiveButton(LanguageManager.get("action.ok", "OK"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.confirm(); }})
+                    .setNegativeButton(LanguageManager.get("action.cancel", "Batal"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.cancel(); }})
                     .setOnCancelListener(new DialogInterface.OnCancelListener() { public void onCancel(DialogInterface dialog) { result.cancel(); }})
                     .show();
                 return true;
@@ -934,10 +757,10 @@ public class MainActivity extends Activity implements ExtensionHost {
             public boolean onJsPrompt(WebView view, String url, String message, String defaultValue, final JsPromptResult result) {
                 final EditText input = new EditText(MainActivity.this);
                 input.setText(defaultValue == null ? "" : defaultValue);
-                new AlertDialog.Builder(MainActivity.this).setTitle("Input dari Halaman")
+                new AlertDialog.Builder(MainActivity.this).setTitle(LanguageManager.get("dialog.title.input.dari.halaman", "Input dari Halaman"))
                     .setMessage(message).setView(input)
-                    .setPositiveButton("Kirim", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.confirm(input.getText().toString()); }})
-                    .setNegativeButton("Batal", new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.cancel(); }})
+                    .setPositiveButton(LanguageManager.get("action.submit", "Kirim"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.confirm(input.getText().toString()); }})
+                    .setNegativeButton(LanguageManager.get("action.cancel", "Batal"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface dialog, int which) { result.cancel(); }})
                     .setOnCancelListener(new DialogInterface.OnCancelListener() { public void onCancel(DialogInterface dialog) { result.cancel(); }})
                     .show();
                 return true;
@@ -1006,7 +829,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         if (scheme != null && !"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme) &&
             !"about".equalsIgnoreCase(scheme) && !"data".equalsIgnoreCase(scheme) && !"javascript".equalsIgnoreCase(scheme)) {
             try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); }
-            catch (Exception error) { showToast("Tidak ada aplikasi yang tersedia untuk membuka alamat ini."); }
+            catch (Exception error) { showToast(LanguageManager.get("toast.tidak.ada.aplikasi.yang.tersedia.untuk.mem", "Tidak ada aplikasi yang tersedia untuk membuka alamat ini.")); }
             return true;
         }
         boolean blocked = isNavigationBlocked(rawUrl, tab.url);
@@ -1031,6 +854,8 @@ public class MainActivity extends Activity implements ExtensionHost {
 
     private void navigate(String url) {
         if (activeTab == null) addTab(true);
+        if (activeTab != null) activeTab.sslCertificateError = false;
+        updateSecurityIndicator(url);
         // Address-bar navigation is an explicit user action; cross-domain guard only blocks page-initiated navigation.
         boolean blocked = isNavigationBlocked(url, activeTab.url, false);
         notifyNavigationObservers(activeTab.url, url, blocked);
@@ -1041,21 +866,21 @@ public class MainActivity extends Activity implements ExtensionHost {
         applyUserAgent(activeTab, url);
         activeTab.bridgeUrl = "about:blank";
         addressBar.setText(url);
-        statusView.setText("meminta halaman...");
+        statusView.setText(LanguageManager.get("status.meminta.halaman", "meminta halaman..."));
         try { activeTab.webView.loadUrl(url); }
-        catch (Exception error) { statusView.setText("gagal membuka url: " + error.getMessage()); }
+        catch (Exception error) { statusView.setText(LanguageManager.get("status.open_url_error_prefix", "Gagal membuka URL: ") + error.getMessage()); }
     }
 
     private void showBlockedPage(BrowserTab tab, String url) {
         tab.url = url;
         tab.bridgeUrl = "about:blank";
-        tab.title = "akses diblokir";
+        tab.title = LanguageManager.get("web.blocked_title", "akses diblokir");
         String safe = TextUtils.htmlEncode(url);
-        String html = "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>body{font-family:sans-serif;margin:24px;color:#222}h2{font-size:21px}code{overflow-wrap:anywhere;color:#8b2727}hr{border:0;border-top:1px solid #ccc}</style></head><body><h2>akses diblokir</h2><p>alamat ini diblokir oleh extension browser.</p><hr><code>" + safe + "</code><p>ubah aturan extension untuk membuka alamat ini.</p></body></html>";
+        String html = "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>body{font-family:sans-serif;margin:24px;color:#222}h2{font-size:21px}code{overflow-wrap:anywhere;color:#8b2727}hr{border:0;border-top:1px solid #ccc}</style></head><body><h2>" + TextUtils.htmlEncode(LanguageManager.get("web.blocked_title", "akses diblokir")) + "</h2><p>" + TextUtils.htmlEncode(LanguageManager.get("web.blocked_description", "alamat ini diblokir oleh extension browser.")) + "</p><hr><code>" + safe + "</code><p>" + TextUtils.htmlEncode(LanguageManager.get("web.blocked_action", "ubah aturan extension untuk membuka alamat ini.")) + "</p></body></html>";
         tab.webView.loadDataWithBaseURL("about:blank", html, "text/html", "UTF-8", null);
         if (activeTab == tab) {
             addressBar.setText(url);
-            statusView.setText("navigasi diblokir oleh extension");
+            statusView.setText(LanguageManager.get("status.navigasi.diblokir.oleh.extension", "navigasi diblokir oleh extension"));
         }
         addDebuggerConsole(tab, "[Chromitext] navigation blocked: " + url);
     }
@@ -1147,7 +972,7 @@ public class MainActivity extends Activity implements ExtensionHost {
             ExtensionInfo info = extensionManager.getExtension(rule.extensionId);
             if (info == null || !extensionManager.isEnabled(info) || !extensionManager.hasPermission(info, "navigationBlocking")) continue;
             if (!extensionManager.matchesDomainLock(info, sourceUrl)) continue;
-            if (isCrossDomainNavigation(sourceUrl, targetUrl)) return true;
+            if (BrowserNavigationPolicy.isCrossDomainNavigation(sourceUrl, targetUrl)) return true;
         }
         for (int i = 0; i < navigationBlockRules.size(); i++) {
             NavigationBlockRule rule = navigationBlockRules.get(i);
@@ -1157,30 +982,6 @@ public class MainActivity extends Activity implements ExtensionHost {
             if (ExtensionManager.matchesHost(targetUrl, rule.domain, true)) return true;
         }
         return false;
-    }
-
-    private boolean isCrossDomainNavigation(String sourceUrl, String targetUrl) {
-        Uri source = Uri.parse(sourceUrl == null ? "" : sourceUrl);
-        Uri target = Uri.parse(targetUrl == null ? "" : targetUrl);
-        String sourceScheme = source.getScheme();
-        String targetScheme = target.getScheme();
-        if (sourceScheme == null || targetScheme == null) return false;
-        if (!("http".equalsIgnoreCase(sourceScheme) || "https".equalsIgnoreCase(sourceScheme))) return false;
-        if (!("http".equalsIgnoreCase(targetScheme) || "https".equalsIgnoreCase(targetScheme))) return false;
-        String sourceHost = normalizeNavigationHost(source.getHost());
-        String targetHost = normalizeNavigationHost(target.getHost());
-        if (sourceHost.length() == 0 || targetHost.length() == 0) return false;
-        if (sourceHost.equals(targetHost)) return false;
-        // Permit current hostname and all of its subdomains, e.g. myweb.id -> api.myweb.id.
-        if (targetHost.endsWith("." + sourceHost)) return false;
-        return true;
-    }
-
-    private String normalizeNavigationHost(String host) {
-        if (host == null) return "";
-        String value = host.trim().toLowerCase(java.util.Locale.US);
-        while (value.endsWith(".") && value.length() > 1) value = value.substring(0, value.length() - 1);
-        return value;
     }
 
     private void applyUserAgent(BrowserTab tab, String targetUrl) {
@@ -1205,25 +1006,7 @@ public class MainActivity extends Activity implements ExtensionHost {
     }
 
     private String getGlobalUserAgent() {
-        if ("desktop".equals(globalUserAgentMode)) {
-            String current = WebSettings.getDefaultUserAgent(this);
-            String version = "120.0.0.0";
-            int chrome = current.indexOf("Chrome/");
-            if (chrome >= 0) {
-                int begin = chrome + "Chrome/".length();
-                int end = current.indexOf(' ', begin);
-                if (end < 0) end = current.length();
-                String found = current.substring(begin, end);
-                if (found.matches("[0-9.]+")) version = found;
-            }
-            return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + version + " Safari/537.36";
-        }
-        if ("safari".equals(globalUserAgentMode)) {
-            return "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
-        }
-        if ("custom".equals(globalUserAgentMode) && customUserAgent.length() > 0) return customUserAgent;
-        // The WebView default UA is the closest built-in Android Chrome-like preset.
-        return WebSettings.getDefaultUserAgent(this);
+        return UserAgentProfileManager.getGlobalUserAgent(this, globalUserAgentMode, customUserAgent);
     }
 
     private void injectScripts(final BrowserTab tab) {
@@ -1269,7 +1052,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         }
     }
 
-    private void syncNetworkDebuggerHooks() {
+    void syncNetworkDebuggerHooks() {
         if (database == null) return;
         boolean shouldEnable = debuggerEnabled && database.isDebuggerModuleEnabled("Network");
         for (int i = 0; i < tabs.size(); i++) {
@@ -1281,31 +1064,8 @@ public class MainActivity extends Activity implements ExtensionHost {
 
     private void injectDebuggerNetworkHooks(final BrowserTab tab) {
         if (tab == null || tab.webView == null || !debuggerEnabled || database == null || !database.isDebuggerModuleEnabled("Network")) return;
-        StringBuilder js = new StringBuilder();
-        js.append("(function(){var w=window;");
-        js.append("if(w.__chromitextNetInstalled){w.__chromitextNetActive=true;return;}");
-        js.append("w.__chromitextNetInstalled=true;w.__chromitextNetActive=true;");
-        js.append("function emit(o){if(!w.__chromitextNetActive)return;try{console.info('__CHROMITEXT_NET__'+JSON.stringify(o));}catch(e){}}");
-        js.append("function clip(v,n){try{v=String(v==null?'':v);return v.length>n?v.slice(0,n)+' [truncated]':v;}catch(e){return '[unavailable]';}}");
-        js.append("function headersOf(h){var o={};try{if(!h)return o;if(typeof Headers!=='undefined'&&h instanceof Headers){h.forEach(function(v,k){o[k]=v;});}else if(Array.isArray(h)){h.forEach(function(p){if(p&&p.length>1)o[p[0]]=p[1];});}else{Object.keys(h).forEach(function(k){o[k]=h[k];});}}catch(e){}return o;}");
-        js.append("var oldFetch=w.fetch;if(typeof oldFetch==='function'){w.fetch=function(input,init){");
-        js.append("var u=typeof input==='string'?input:((input&&input.url)||String(input));var m=(init&&init.method)||((input&&input.method)||'GET');");
-        js.append("var rh=headersOf((init&&init.headers)||((input&&input.headers)||null));var rb=(init&&typeof init.body!=='undefined')?clip(init.body,4000):'';var start=Date.now();");
-        js.append("return oldFetch.apply(this,arguments).then(function(r){var h={};try{r.headers.forEach(function(v,k){h[k]=v;});}catch(e){}");
-        js.append("var emitResponse=function(body){emit({type:'fetch',method:m,url:r.url||u,status:r.status,statusText:r.statusText,requestHeaders:rh,requestBody:rb,headers:h,responseBody:clip(body,5000),ms:Date.now()-start});};");
-        js.append("try{r.clone().text().then(function(body){emitResponse(body);},function(){emitResponse('[response body unavailable]');});}catch(e){emitResponse('[response body unavailable]');}return r;},");
-        js.append("function(e){emit({type:'fetch',method:m,url:u,status:0,error:String(e),requestHeaders:rh,requestBody:rb,ms:Date.now()-start});throw e;});};}");
-        js.append("var p=w.XMLHttpRequest&&w.XMLHttpRequest.prototype;if(p&&p.open&&p.send){var oldOpen=p.open;var oldSend=p.send;var oldSet=p.setRequestHeader;");
-        js.append("p.open=function(m,u){this.__chromitextMethod=m;this.__chromitextUrl=u;this.__chromitextHeaders={};return oldOpen.apply(this,arguments);};");
-        js.append("if(oldSet)p.setRequestHeader=function(k,v){try{this.__chromitextHeaders=this.__chromitextHeaders||{};this.__chromitextHeaders[k]=v;}catch(e){}return oldSet.apply(this,arguments);};");
-        js.append("p.send=function(body){var x=this;x.__chromitextStart=Date.now();x.__chromitextBody=clip(body,4000);");
-        js.append("if(!x.__chromitextBound){x.__chromitextBound=true;x.addEventListener('loadend',function(){var h={};try{var raw=x.getAllResponseHeaders().trim();");
-        js.append("if(raw){raw.split(/\\r?\\n/).forEach(function(line){var n=line.indexOf(':');if(n>0)h[line.slice(0,n).trim()]=line.slice(n+1).trim();});}}catch(e){}");
-        js.append("var bodyText='';try{bodyText=clip(x.responseText,5000);}catch(e){bodyText='[response body unavailable]';}");
-        js.append("emit({type:'xhr',method:x.__chromitextMethod||'GET',url:x.responseURL||x.__chromitextUrl||'',status:x.status,statusText:x.statusText,requestHeaders:x.__chromitextHeaders||{},requestBody:x.__chromitextBody||'',headers:h,responseBody:bodyText,ms:Date.now()-(x.__chromitextStart||Date.now())});});}");
-        js.append("return oldSend.apply(this,arguments);};}");
-        js.append("})();");
-        try { tab.webView.evaluateJavascript(js.toString(), null); }
+        String js = BrowserNetworkInstrumentation.buildJavaScript();
+        try { tab.webView.evaluateJavascript(js, null); }
         catch (Exception error) { addDebuggerConsole(tab, "[ERROR] [network debugger] failed to install hook: " + error.getMessage()); }
     }
 
@@ -1349,7 +1109,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         }
         if (tab != null) {
             addressBar.setText(tab.url.startsWith("about:blank") ? "" : tab.url);
-            statusView.setText(tab.loading ? "memuat..." : "Siap");
+            statusView.setText(tab.loading ? LanguageManager.get("status.loading", "Memuat...") : LanguageManager.get("status.ready", "Siap"));
             if (tab.extensionReloadPending && tab.webView != null && !tab.url.startsWith("about:blank")) {
                 tab.extensionReloadPending = false;
                 tab.webView.reload();
@@ -1388,11 +1148,11 @@ public class MainActivity extends Activity implements ExtensionHost {
     private void updateTabSummary() {
         if (tabSummary == null) return;
         String name = activeTab == null ? "" : activeTab.title;
-        tabSummary.setText("tabs: " + tabs.size() + "  |  aktif: " + (tabs.indexOf(activeTab) + 1) + "  |  " + name);
+        tabSummary.setText(LanguageManager.get("status.tabs_prefix", "Tab: ") + tabs.size() + "  |  " + LanguageManager.get("status.active_tab_prefix", "Aktif: ") + (tabs.indexOf(activeTab) + 1) + "  |  " + name);
     }
 
-    private LinearLayout openPage(final String title) {
-        hideAddressSuggestions();
+    LinearLayout openPage(final String title) {
+        addressSuggestionController.hide();
         hideDebuggerPanel();
         if (replaceNextPage) {
             replaceNextPage = false;
@@ -1412,7 +1172,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         return page.body;
     }
 
-    private void backFromPage() {
+    void backFromPage() {
         if (activePageView != null) appFrame.removeView(activePageView);
         activePageView = null;
         if (pageStack.size() > 0) activePageView = pageStack.remove(pageStack.size() - 1);
@@ -1426,80 +1186,47 @@ public class MainActivity extends Activity implements ExtensionHost {
         }
     }
 
-    private void replaceCurrentPage() { replaceNextPage = true; }
+    void replaceCurrentPage() { replaceNextPage = true; }
 
-    private void addPageAction(LinearLayout body, int iconCode, String title, String description, View.OnClickListener listener) {
+    void addPageAction(LinearLayout body, int iconCode, String title, String description, View.OnClickListener listener) {
         browserPageLayout.addAction(body, iconCode, title, description, listener);
     }
 
-    private void addPageNote(LinearLayout body, String value) {
+    void addPageNote(LinearLayout body, String value) {
         browserPageLayout.addNote(body, value);
     }
 
-    private void showMainMenu() {
-        LinearLayout body = openPage("Menu");
-        addPageAction(body, 0xf02e, "Bookmark", "Halaman yang disimpan", new View.OnClickListener() { public void onClick(View v) { showBookmarks(); } });
-        addPageAction(body, 0xf1da, "Riwayat Penjelajahan", "Daftar halaman yang pernah dibuka", new View.OnClickListener() { public void onClick(View v) { showHistory(); } });
-        addPageAction(body, 0xf019, "Unduhan", "File unduhan dikelola Android", new View.OnClickListener() { public void onClick(View v) { showDownloadsInfo(); } });
-        addPageAction(body, 0xf12e, "Extension", "Aktifkan atau nonaktifkan extension dengan cepat", new View.OnClickListener() { public void onClick(View v) { backFromPage(); showQuickExtensionPopup(); } });
-        addPageAction(body, 0xf013, "Pengaturan", "Preferensi, privasi, keamanan, dan debugging", new View.OnClickListener() { public void onClick(View v) { showSettings(); } });
-        addPageAction(body, 0xf188, "Developer Tools", "Console dan Network untuk tab aktif", new View.OnClickListener() { public void onClick(View v) { showDebuggerSettings(); } });
-        addPageAction(body, 0xf2f1, "JavaScript", "Status: " + (javascriptEnabled ? "Aktif" : "Nonaktif"), new View.OnClickListener() { public void onClick(View v) { toggleJavascript(); replaceCurrentPage(); showMainMenu(); } });
-        addPageAction(body, 0xf108, "Mode Desktop" + ("desktop".equals(globalUserAgentMode) ? " [aktif]" : " [nonaktif]"), "Ganti User-Agent ke Chrome desktop dan sesuaikan viewport halaman", new View.OnClickListener() { public void onClick(View v) { toggleDesktopMode(); } });
-        addPageAction(body, 0xf12a, "Hapus Data Situs", "Hapus cache, cookie, dan web storage", new View.OnClickListener() { public void onClick(View v) { clearBrowserData(); } });
-        addPageAction(body, 0xf05a, "Tentang Chromitext", "Informasi aplikasi", new View.OnClickListener() { public void onClick(View v) { showAbout(); } });
+    private void showMainMenu() { settingsUiController.showMainMenu(); }
+
+    private void showSettings() { settingsUiController.showSettings(); }
+
+
+
+    void showLanguageSettings() {
+        LanguageSettingsController.show(this, database, new LanguageSettingsController.Listener() {
+            public void onLanguageChanged(String languageCode) {
+                rebuildBrowserUiForLanguage();
+            }
+        });
     }
 
-    private void showSettings() {
-        LinearLayout body = openPage("Pengaturan");
-        addPageAction(body, 0xf0ad, "Preferensi", "Tampilan, user-agent global, JavaScript, dan halaman awal", new View.OnClickListener() { public void onClick(View v) { showPreferenceSettings(); } });
-        addPageAction(body, 0xf21b, "Privasi", "Cookie per domain dan data situs", new View.OnClickListener() { public void onClick(View v) { showPrivacySettings(); } });
-        addPageAction(body, 0xf132, "Keamanan", "Validasi sertifikat SSL dan penghapusan data", new View.OnClickListener() { public void onClick(View v) { showSecuritySettings(); } });
-        addPageAction(body, 0xf188, "Debugging", "Developer Tools dan konfigurasi modul", new View.OnClickListener() { public void onClick(View v) { showDebuggerSettings(); } });
-        addPageAction(body, 0xf12e, "Ekstensi", "Kelola extension dan izin akses", new View.OnClickListener() { public void onClick(View v) { showExtensionManager(); } });
-        addPageAction(body, 0xf05a, "Tentang", "Informasi aplikasi dan komponen", new View.OnClickListener() { public void onClick(View v) { showAbout(); } });
+    private void updateSecurityIndicator(String url) {
+        boolean invalidCertificate = activeTab != null && url != null && url.equals(activeTab.url) && activeTab.sslCertificateError;
+        ConnectionSecurityUi.update(this, securityLockButton, url, COLOR_TEXT, invalidCertificate);
     }
 
-    private void showPreferenceSettings() {
-        LinearLayout body = openPage("Preferensi");
-        addPageAction(body, 0xf1ab, "User-Agent Global", "Saat ini: " + userAgentModeLabel(), new View.OnClickListener() { public void onClick(View v) { showUserAgentSettings(); } });
-        addPageAction(body, 0xf11c, "JavaScript", javascriptEnabled ? "Aktif" : "Nonaktif", new View.OnClickListener() { public void onClick(View v) { toggleJavascript(); replaceCurrentPage(); showPreferenceSettings(); } });
-        addPageAction(body, 0xf015, "Halaman Awal", "Atur URL yang dibuka melalui tombol Beranda", new View.OnClickListener() { public void onClick(View v) { editHomepage(); } });
-        addPageAction(body, 0xf042, "Tampilan Aplikasi", "Tema, posisi address bar, dan ukuran toolbar", new View.OnClickListener() { public void onClick(View v) { showAppearanceSettings(); } });
-        addPageNote(body, "User-Agent berlaku secara global untuk semua situs. Penggantian per domain hanya tersedia melalui extension.");
+    private void showConnectionSecurityInfo() {
+        String url = activeTab == null ? (addressBar == null ? "" : addressBar.getText().toString()) : activeTab.url;
+        ConnectionSecurityUi.showInfo(this, url, activeTab != null && activeTab.sslCertificateError);
     }
 
-    private void showAppearanceSettings() {
-        LinearLayout body = openPage("Tampilan Aplikasi");
-        addPageAction(body, 0xf042, "Tema Aplikasi", getThemeLabel(), new View.OnClickListener() { public void onClick(View v) {
-            showSingleChoiceSetting("Tema Aplikasi", "ui_theme", new String[]{"system", "light", "dark"}, new String[]{"Ikuti Sistem", "Terang", "Gelap"}, true);
-        }});
-        addPageAction(body, 0xf0c9, "Posisi Address Bar", searchAtBottom ? "Bawah" : "Atas", new View.OnClickListener() { public void onClick(View v) {
-            showSingleChoiceSetting("Posisi Address Bar", "ui_search_position", new String[]{"top", "bottom"}, new String[]{"Atas", "Bawah"}, false);
-        }});
-        addPageAction(body, 0xf03b, "Tinggi Address Bar", configuredSearchHeight + " dp", new View.OnClickListener() { public void onClick(View v) {
-            showSingleChoiceSetting("Tinggi Address Bar", "ui_search_height", new String[]{"34", "38", "42", "46", "50", "54"}, new String[]{"34 dp — sangat ringkas", "38 dp — ringkas", "42 dp — normal", "46 dp", "50 dp", "54 dp — besar"}, false);
-        }});
-        addPageAction(body, 0xf150, "Tinggi Toolbar", configuredToolbarHeight + " dp", new View.OnClickListener() { public void onClick(View v) {
-            showSingleChoiceSetting("Tinggi Toolbar", "ui_toolbar_height", new String[]{"34", "38", "42", "46", "50", "54"}, new String[]{"34 dp — sangat ringkas", "38 dp — ringkas", "42 dp — normal", "46 dp", "50 dp", "54 dp — besar"}, false);
-        }});
-        addPageAction(body, 0xf00a, "Ukuran Ikon Toolbar", configuredIconSize + " sp", new View.OnClickListener() { public void onClick(View v) {
-            showSingleChoiceSetting("Ukuran Ikon Toolbar", "ui_icon_size", new String[]{"12", "14", "15", "17", "19", "22"}, new String[]{"12 sp", "14 sp", "15 sp", "17 sp", "19 sp", "22 sp"}, false);
-        }});
-        addPageAction(body, 0xf0c9, "Jarak Antar Tombol", configuredToolbarGap + " dp", new View.OnClickListener() { public void onClick(View v) {
-            showSingleChoiceSetting("Jarak Antar Tombol", "ui_toolbar_gap", new String[]{"0", "1", "2", "3", "4", "5"}, new String[]{"0 dp — rapat", "1 dp", "2 dp", "3 dp", "4 dp", "5 dp — renggang"}, false);
-        }});
-        addPageNote(body, "Ukuran visual ikon dapat lebih kecil daripada area sentuh tombol untuk menjaga kemudahan penggunaan.");
-    }
+    private void showPreferenceSettings() { settingsUiController.showPreferenceSettings(); }
 
-    private String getThemeLabel() {
-        String mode = database.getSetting("ui_theme", "system");
-        if ("dark".equals(mode)) return "Gelap";
-        if ("light".equals(mode)) return "Terang";
-        return "Ikuti Sistem";
-    }
+    private void showAppearanceSettings() { settingsUiController.showAppearanceSettings(); }
 
-    private void showSingleChoiceSetting(final String title, final String key, final String[] values, final String[] labels, final boolean isTheme) {
+
+
+    void showSingleChoiceSetting(final String title, final String key, final String[] values, final String[] labels, final boolean isTheme) {
         String fallback = "";
         if ("ui_theme".equals(key)) fallback = "system";
         else if ("ui_search_position".equals(key)) fallback = "top";
@@ -1533,10 +1260,25 @@ public class MainActivity extends Activity implements ExtensionHost {
                 applyPalette();
                 rebuildBrowserUiForAppearance();
             }
-        }).setNegativeButton("Batal", null).show();
+        }).setNegativeButton(LanguageManager.get("action.cancel", "Batal"), null).show();
     }
 
-    private void rebuildBrowserUiForAppearance() {
+    void rebuildBrowserUiForAppearance() {
+        rebuildBrowserUiChrome();
+        showAppearanceSettings();
+    }
+
+    private void rebuildBrowserUiForLanguage() {
+        for (int i = 0; i < tabs.size(); i++) {
+            BrowserTab tab = tabs.get(i);
+            if (tab.url == null || tab.url.startsWith("about:blank")) tab.title = LanguageManager.get("tabs.new_tab", "Tab Baru");
+        }
+        rebuildBrowserUiChrome();
+        replaceCurrentPage();
+        showSettings();
+    }
+
+    private void rebuildBrowserUiChrome() {
         if (webFrame == null || rootLayout == null || browserLayer == null) return;
         activePageView = null;
         pageStack.clear();
@@ -1549,57 +1291,44 @@ public class MainActivity extends Activity implements ExtensionHost {
             }
         }
         if (activeTab != null) setActiveTab(activeTab);
-        showAppearanceSettings();
     }
 
-    private void toggleDesktopMode() {
+    void toggleDesktopMode() {
         String nextMode = "desktop".equals(globalUserAgentMode) ? "default" : "desktop";
         globalUserAgentMode = nextMode;
         database.putSetting("user_agent_mode", globalUserAgentMode);
         applyGlobalUserAgentToTabs();
-        showToast("Mode Desktop " + ("desktop".equals(globalUserAgentMode) ? "diaktifkan." : "dinonaktifkan."));
+        showToast(LanguageManager.format("toast.desktop_mode_status", "Mode Desktop %1$s", "desktop".equals(globalUserAgentMode) ? LanguageManager.get("state.turned_on", "diaktifkan") : LanguageManager.get("state.turned_off", "dinonaktifkan")));
         replaceCurrentPage();
         showMainMenu();
     }
 
-    private String userAgentModeLabel() {
-        if ("desktop".equals(globalUserAgentMode)) return "Chrome desktop";
-        if ("safari".equals(globalUserAgentMode)) return "Safari iOS";
-        if ("custom".equals(globalUserAgentMode)) return "Custom";
-        return "Default Android WebView";
-    }
 
-    private void showUserAgentSettings() {
-        LinearLayout body = openPage("User-Agent Global");
-        addPageAction(body, 0xf192, "Default Android / Chrome Mobile", "Gunakan User-Agent bawaan WebView", new View.OnClickListener() { public void onClick(View v) { saveUserAgent("default", ""); } });
-        addPageAction(body, 0xf108, "Chrome desktop", "Gunakan identitas Chrome desktop di Linux", new View.OnClickListener() { public void onClick(View v) { saveUserAgent("desktop", ""); } });
-        addPageAction(body, 0xf179, "Safari iOS", "Gunakan template User-Agent Safari mobile", new View.OnClickListener() { public void onClick(View v) { saveUserAgent("safari", ""); } });
-        addPageAction(body, 0xf044, "Custom User-Agent", "Masukkan string User-Agent kustom", new View.OnClickListener() { public void onClick(View v) { promptCustomUserAgent(); } });
-        addPageNote(body, "Mengubah User-Agent tidak meniru seluruh fitur, rendering, atau API browser lain.");
-    }
 
-    private void saveUserAgent(String mode, String custom) {
+    private void showUserAgentSettings() { settingsUiController.showUserAgentSettings(); }
+
+    void saveUserAgent(String mode, String custom) {
         globalUserAgentMode = mode;
         if (custom != null) customUserAgent = custom;
         database.putSetting("user_agent_mode", globalUserAgentMode);
         database.putSetting("user_agent_custom", customUserAgent);
         applyGlobalUserAgentToTabs();
-        showToast("User-Agent global disimpan.");
+        showToast(LanguageManager.get("toast.user.agent.global.disimpan", "User-Agent global disimpan."));
         replaceCurrentPage();
         showUserAgentSettings();
     }
 
-    private void promptCustomUserAgent() {
+    void promptCustomUserAgent() {
         final EditText input = new EditText(this);
         input.setSingleLine(false);
         input.setText(customUserAgent);
-        input.setHint("Mozilla/5.0 ...");
-        new AlertDialog.Builder(this).setTitle("Custom User-Agent").setView(input)
-            .setPositiveButton("Simpan", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
+        input.setHint(LanguageManager.get("placeholder.user_agent", "Mozilla/5.0 ..."));
+        new AlertDialog.Builder(this).setTitle(LanguageManager.get("dialog.title.custom.user.agent", "Custom User-Agent")).setView(input)
+            .setPositiveButton(LanguageManager.get("action.save", "Simpan"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
                 String value = input.getText().toString().trim();
-                if (value.length() == 0) { showToast("User-Agent tidak boleh kosong."); return; }
+                if (value.length() == 0) { showToast(LanguageManager.get("toast.user.agent.tidak.boleh.kosong", "User-Agent tidak boleh kosong.")); return; }
                 saveUserAgent("custom", value);
-            }}).setNegativeButton("Batal", null).show();
+            }}).setNegativeButton(LanguageManager.get("action.cancel", "Batal"), null).show();
     }
 
     private void applyGlobalUserAgentToTabs() {
@@ -1610,164 +1339,51 @@ public class MainActivity extends Activity implements ExtensionHost {
         }
     }
 
-    private void editHomepage() {
+    void editHomepage() {
         final EditText input = new EditText(this);
         input.setSingleLine(true);
         input.setText(database.getSetting("homepage", "https://www.google.com/"));
-        input.setHint("https://example.com/");
-        new AlertDialog.Builder(this).setTitle("Halaman Awal").setView(input)
-            .setPositiveButton("Simpan", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
+        input.setHint(LanguageManager.get("placeholder.homepage", "https://example.com/"));
+        new AlertDialog.Builder(this).setTitle(LanguageManager.get("dialog.title.halaman.awal", "Halaman Awal")).setView(input)
+            .setPositiveButton(LanguageManager.get("action.save", "Simpan"), new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
                 String value = input.getText().toString().trim();
                 if (value.length() == 0) value = "https://www.google.com/";
                 if (!value.contains("://")) value = "https://" + value;
                 database.putSetting("homepage", value);
-                showToast("Halaman awal disimpan.");
-            }}).setNegativeButton("Batal", null).show();
+                showToast(LanguageManager.get("toast.halaman.awal.disimpan", "Halaman awal disimpan."));
+            }}).setNegativeButton(LanguageManager.get("action.cancel", "Batal"), null).show();
     }
 
-    private void showPrivacySettings() {
-        LinearLayout body = openPage("Privasi & Cookie");
-        addPageNote(body, "Daftar origin berasal dari situs yang pernah dibuka. Cookie yang ditampilkan mengikuti data yang disimpan WebView.");
-        List<String> origins = database.getKnownOrigins();
-        if (origins.size() == 0) addPageNote(body, "Belum ada origin yang tercatat.");
-        for (int i = 0; i < origins.size(); i++) {
-            final String origin = origins.get(i);
-            addPageAction(body, 0xf1c0, origin, "Lihat atau hapus cookie dan Web Storage", new View.OnClickListener() { public void onClick(View v) { showOriginStorage(origin); } });
-        }
-        addPageAction(body, 0xf12d, "Hapus Semua Cookie", "Hapus cookie dari seluruh situs", new View.OnClickListener() { public void onClick(View v) { confirmClearCookies(); } });
-        addPageAction(body, 0xf2ed, "Hapus Seluruh Web Storage", "Hapus data Web Storage dari seluruh origin", new View.OnClickListener() { public void onClick(View v) { confirmClearWebStorage(); } });
-    }
+    private void showPrivacySettings() { settingsUiController.showPrivacySettings(); }
 
-    private void showOriginStorage(final String origin) {
-        LinearLayout body = openPage("Web Storage Domain");
-        String cookies = CookieManager.getInstance().getCookie(origin);
-        addPageNote(body, "origin: " + origin + "\n\ncookie saat ini:\n" + (cookies == null ? "(kosong)" : cookies));
-        addPageAction(body, 0xf2ed, "Hapus Cookie Domain Ini", "Penghapusan bersifat best-effort; cookie dengan Path atau Domain khusus mungkin memerlukan penanganan tambahan.", new View.OnClickListener() { public void onClick(View v) { confirmDeleteOriginCookies(origin); } });
-        addPageAction(body, 0xf2ed, "Hapus Seluruh Storage Domain Ini", "Hapus data Web Storage untuk origin ini", new View.OnClickListener() { public void onClick(View v) {
-            new AlertDialog.Builder(MainActivity.this).setTitle("Hapus Storage Domain?").setMessage(origin + "\n\nlocalStorage dan data WebStorage origin ini akan dihapus.")
-                .setPositiveButton("Hapus", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
-                    android.webkit.WebStorage.getInstance().deleteOrigin(origin);
-                    if (activeTab != null && origin.equals(getOrigin(activeTab.url))) activeTab.webView.evaluateJavascript("try{localStorage.clear();sessionStorage.clear();}catch(e){}", null);
-                    showToast("Storage origin dihapus."); replaceCurrentPage(); showOriginStorage(origin);
-                }}).setNegativeButton("Batal", null).show();
-        }});
-    }
+    private void showOriginStorage(final String origin) { settingsUiController.showOriginStorage(origin); }
 
-    private void confirmDeleteOriginCookies(final String origin) {
-        new AlertDialog.Builder(this).setTitle("Hapus Cookie Domain?").setMessage("Cookie untuk " + origin + " akan dihapus dari CookieManager.")
-            .setPositiveButton("Hapus", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
-                final String raw = CookieManager.getInstance().getCookie(origin);
-                if (raw != null) {
-                    String host = Uri.parse(origin).getHost();
-                    String[] pairs = raw.split(";");
-                    CookieManager cm = CookieManager.getInstance();
-                    for (int i = 0; i < pairs.length; i++) {
-                        String pair = pairs[i].trim();
-                        int eq = pair.indexOf('=');
-                        if (eq > 0) {
-                            String name = pair.substring(0, eq).trim();
-                            cm.setCookie(origin, name + "=; Max-Age=0; Path=/");
-                            if (host != null) cm.setCookie(origin, name + "=; Max-Age=0; Path=/; Domain=" + host);
-                        }
-                    }
-                    if (Build.VERSION.SDK_INT >= 21) cm.flush();
-                }
-                showToast("Permintaan penghapusan cookie dikirim."); replaceCurrentPage(); showOriginStorage(origin);
-            }}).setNegativeButton("Batal", null).show();
-    }
+    private void confirmDeleteOriginCookies(final String origin) { settingsUiController.confirmDeleteOriginCookies(origin); }
 
-    private void confirmClearCookies() {
-        new AlertDialog.Builder(this).setTitle("Hapus Semua Cookie?").setMessage("Cookie seluruh domain akan dihapus.")
-            .setPositiveButton("Hapus", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
-                CookieManager cm = CookieManager.getInstance();
-                if (Build.VERSION.SDK_INT >= 21) { cm.removeAllCookies(null); cm.flush(); }
-                else { CookieSyncManager.createInstance(MainActivity.this); cm.removeAllCookie(); }
-                showToast("Semua cookie dihapus."); replaceCurrentPage(); showPrivacySettings();
-            }}).setNegativeButton("Batal", null).show();
-    }
+    private void confirmClearCookies() { settingsUiController.confirmClearCookies(); }
 
-    private void confirmClearWebStorage() {
-        new AlertDialog.Builder(this).setTitle("Hapus Seluruh Web Storage?").setMessage("Data penyimpanan situs akan dihapus.")
-            .setPositiveButton("Hapus", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
-                android.webkit.WebStorage.getInstance().deleteAllData();
-                for (int i = 0; i < tabs.size(); i++) tabs.get(i).webView.evaluateJavascript("try{localStorage.clear();sessionStorage.clear();}catch(e){}", null);
-                showToast("Web Storage dihapus.");
-            }}).setNegativeButton("Batal", null).show();
-    }
+    private void confirmClearWebStorage() { settingsUiController.confirmClearWebStorage(); }
 
-    private void showSecuritySettings() {
-        LinearLayout body = openPage("Keamanan");
-        addPageAction(body, 0xf12a, "Hapus Data Browser", "Cache, cookie, dan data situs", new View.OnClickListener() { public void onClick(View v) { clearBrowserData(); } });
-        addPageNote(body, "Koneksi dengan sertifikat SSL yang tidak valid selalu dibatalkan. Chromitext tidak menyediakan opsi untuk melewati validasi sertifikat.");
-        addPageNote(body, "Extension Java/BeanShell dapat mengakses kelas yang tersedia di proses aplikasi. Pasang extension hanya dari sumber tepercaya.");
-    }
+    private void showSecuritySettings() { settingsUiController.showSecuritySettings(); }
 
-    private void showDebuggerSettings() {
-        LinearLayout body = openPage("Debugging");
-        addPageAction(body, 0xf188, "Developer Tools", debuggerEnabled ? "Aktif — ketuk tombol Developer Tools yang mengambang untuk membuka panel." : "Nonaktif — Developer Tools tidak berjalan secara default.", new View.OnClickListener() { public void onClick(View v) {
-            debuggerEnabled = !debuggerEnabled;
-            database.putBoolean("debugger_enabled", debuggerEnabled);
-            if (!debuggerEnabled) hideDebuggerPanel();
-            refreshDebuggerOverlayVisibility();
-            syncNetworkDebuggerHooks();
-            replaceCurrentPage();
-            showDebuggerSettings();
-        }});
-        addPageNote(body, "Modul yang aktif menentukan tab yang tersedia pada overlay. Modul nonaktif tidak ditampilkan dan tidak mengumpulkan data.");
-        final String[] modules = new String[]{"Console", "Network", "Storage", "Source", "Elements", "Info"};
-        final int[] icons = new int[]{0xf120, 0xf0ac, 0xf1c0, 0xf121, 0xf1fc, 0xf05a};
-        for (int i = 0; i < modules.length; i++) {
-            final String module = modules[i];
-            addPageAction(body, icons[i], module, database.isDebuggerModuleEnabled(module) ? "Aktif" : "Nonaktif", new View.OnClickListener() { public void onClick(View v) {
-                database.setDebuggerModuleEnabled(module, !database.isDebuggerModuleEnabled(module));
-                if ("Network".equals(module)) syncNetworkDebuggerHooks();
-                rebuildDebuggerPanel(); replaceCurrentPage(); showDebuggerSettings();
-            }});
-        }
-        addPageAction(body, 0xf12d, "Hapus Log Debugger", "Hapus log Console, Network, dan extension", new View.OnClickListener() { public void onClick(View v) {
-            for (int j = 0; j < tabs.size(); j++) { synchronized (tabs.get(j)) { tabs.get(j).consoleLogs.clear(); tabs.get(j).networkLogs.clear(); } }
-            database.clearExtensionLogs();
-            showToast("Log debugger dihapus.");
-        }});
-        addPageAction(body, 0xf188, "Debugger Extension", "Lihat log error dan runtime extension", new View.OnClickListener() { public void onClick(View v) { showExtensionDebugger(); } });
-    }
 
-    private void showExtensionDebugger() { showExtensionDebugger(null); }
 
-    private void showExtensionDebugger(final String extensionId) {
-        String pageTitle = extensionId == null ? "Debugger Extension" : "Log: " + extensionId;
-        LinearLayout body = openPage(pageTitle);
-        final TextView logs = new TextView(this);
-        logs.setTextColor(COLOR_TEXT);
-        logs.setTextSize(12);
-        logs.setTypeface(Typeface.MONOSPACE);
-        String currentLogs = database.getExtensionLogs(extensionId);
-        logs.setText(currentLogs.length() == 0 ? "Belum ada log" + (extensionId == null ? " extension." : " untuk " + extensionId + ".") : currentLogs);
-        logs.setPadding(dp(8), dp(8), dp(8), dp(8));
-        logs.setBackground(boxBackground(darkTheme ? Color.rgb(29, 33, 39) : Color.rgb(247, 245, 239), COLOR_BORDER));
-        body.addView(logs, new LinearLayout.LayoutParams(-1, -2));
-        addPageAction(body, 0xf021, "Muat Ulang Log", "Muat ulang log" + (extensionId == null ? " seluruh extension" : " milik extension ini"), new View.OnClickListener() { public void onClick(View v) {
-            String value = database.getExtensionLogs(extensionId);
-            logs.setText(value.length() == 0 ? "Belum ada log" + (extensionId == null ? " extension." : " untuk " + extensionId + ".") : value);
-        }});
-        addPageAction(body, 0xf12d, "Hapus Log", extensionId == null ? "Hapus log seluruh extension" : "Hanya hapus log " + extensionId, new View.OnClickListener() { public void onClick(View v) {
-            database.clearExtensionLogs(extensionId);
-            logs.setText("Belum ada log" + (extensionId == null ? " extension." : " untuk " + extensionId + "."));
-        }});
-        addPageNote(body, "Log difilter berdasarkan ID extension saat layar dibuka dari detail extension. Error BeanShell ditampilkan sesuai catatan runtime yang tersedia.");
-    }
+    private void showDebuggerSettings() { settingsUiController.showDebuggerSettings(); }
 
-    private void showAbout() {
-        LinearLayout body = openPage("Tentang Chromitext");
-        addPageNote(body, "Chromitext\nBrowser Android berbasis WebView.\nPackage: rh.chromitext.browser\nDatabase pengaturan: chromite.db\n\nFitur: multi-tab, bookmark, history, download Android, global user-agent, cookie/storage manager, debugger overlay opsional, debugger extension, dan extension ZIP.\n\nExtension Java menggunakan BeanShell opsional. Tambahkan bsh-2.0b4.jar ke folder libs/ di project AIDE lalu rebuild. Permission internet dan Android API dipakai sebagai pemeriksaan source-level umum, bukan sandbox yang tahan bypass; instal hanya extension tepercaya.");
-    }
+    private void showExtensionDebugger() { settingsUiController.showExtensionDebugger(); }
+
+
+
+    private void showExtensionDebugger(final String extensionId) { settingsUiController.showExtensionDebugger(extensionId); }
+
+    private void showAbout() { settingsUiController.showAbout(); }
 
     private void rememberCurrentOrigin(String url) {
         String origin = getOrigin(url);
         if (origin != null && database != null) database.rememberOrigin(origin);
     }
 
-    private String getOrigin(String url) {
+    String getOrigin(String url) {
         try {
             Uri uri = Uri.parse(url);
             String scheme = uri.getScheme();
@@ -1790,11 +1406,11 @@ public class MainActivity extends Activity implements ExtensionHost {
         debuggerOverlay.setEnabled(debuggerEnabled);
     }
 
-    private void refreshDebuggerOverlayVisibility() {
+    void refreshDebuggerOverlayVisibility() {
         if (debuggerOverlay != null) debuggerOverlay.setEnabled(debuggerEnabled);
     }
 
-    private void hideDebuggerPanel() {
+    void hideDebuggerPanel() {
         if (debuggerOverlay != null) debuggerOverlay.hidePanel();
     }
 
@@ -1802,18 +1418,18 @@ public class MainActivity extends Activity implements ExtensionHost {
         if (debuggerOverlay != null) debuggerOverlay.refreshPanel();
     }
 
-    private void rebuildDebuggerPanel() {
+    void rebuildDebuggerPanel() {
         if (debuggerOverlay != null) debuggerOverlay.rebuildPanelTabs();
     }
 
-    private void showTabsDialog() {
-        LinearLayout body = openPage("Tab Terbuka (" + tabs.size() + ")");
-        addPageAction(body, 0xf067, "Tab Baru", "Buka tab baru", new View.OnClickListener() { public void onClick(View v) { addTab(false); backFromPage(); } });
+    void showTabsDialog() {
+        LinearLayout body = openPage(LanguageManager.format("tabs.open_count_title", "Tab Terbuka (%1$d)", tabs.size()));
+        addPageAction(body, 0xf067,LanguageManager.get("ui.tab.baru", "Tab Baru"),LanguageManager.get("description.buka.tab.baru", "Buka tab baru"), new View.OnClickListener() { public void onClick(View v) { addTab(false); backFromPage(); } });
         for (int i = 0; i < tabs.size(); i++) {
             final BrowserTab tab = tabs.get(i);
             final int number = i + 1;
-            addPageAction(body, 0xf2d0, (tab == activeTab ? "[aktif] " : "") + number + ". " + tab.title, tab.url, new View.OnClickListener() { public void onClick(View v) { setActiveTab(tab); backFromPage(); } });
-            addPageAction(body, 0xf00d, "Tutup Tab " + number, tab.title, new View.OnClickListener() { public void onClick(View v) {
+            addPageAction(body, 0xf2d0, (tab == activeTab ? LanguageManager.get("state.active_prefix", "[aktif] ") : "") + number + ". " + tab.title, tab.url, new View.OnClickListener() { public void onClick(View v) { setActiveTab(tab); backFromPage(); } });
+            addPageAction(body, 0xf00d, LanguageManager.format("tabs.close_title", "Tutup Tab %1$d", number), tab.title, new View.OnClickListener() { public void onClick(View v) {
                 if (tab == activeTab) closeActiveTab();
                 else { tabs.remove(tab); webFrame.removeView(tab.webView); try { tab.webView.stopLoading(); tab.webView.destroy(); } catch (Exception ignored) { } updateTabSummary(); }
                 backFromPage();
@@ -1821,7 +1437,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         }
     }
 
-    private void showQuickExtensionPopup() {
+    void showQuickExtensionPopup() {
         extensionManager.refresh();
         final List<ExtensionInfo> installed = extensionManager.getExtensions();
         LinearLayout content = new LinearLayout(this);
@@ -1831,7 +1447,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         final AlertDialog[] dialogHolder = new AlertDialog[1];
         if (installed.size() == 0) {
             TextView empty = new TextView(this);
-            empty.setText("Belum ada extension yang terpasang. Pasang ZIP melalui Pengelola Extension di Pengaturan.");
+            empty.setText(LanguageManager.get("status.belum.ada.extension.yang.terpasang.pasang", "Belum ada extension yang terpasang. Pasang ZIP melalui Pengelola Extension di Pengaturan."));
             empty.setTextColor(COLOR_TEXT);
             empty.setTextSize(14);
             empty.setPadding(dp(6), dp(15), dp(6), dp(15));
@@ -1852,7 +1468,7 @@ public class MainActivity extends Activity implements ExtensionHost {
                 name.setTextSize(14);
                 name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
                 TextView description = new TextView(this);
-                String desc = info.description == null || info.description.length() == 0 ? info.type + " extension" : info.description;
+                String desc = info.description == null || info.description.length() == 0 ? LanguageManager.format("extension.type_description", "%1$s extension", info.type) : info.description;
                 description.setText(desc);
                 description.setTextColor(darkTheme ? Color.rgb(165, 172, 182) : Color.rgb(94, 94, 94));
                 description.setTextSize(11);
@@ -1863,7 +1479,7 @@ public class MainActivity extends Activity implements ExtensionHost {
                 row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
                 final Switch toggle = new Switch(this);
                 toggle.setChecked(extensionManager.isEnabled(info));
-                toggle.setContentDescription("Aktifkan " + info.getDisplayName());
+                toggle.setContentDescription(LanguageManager.format("accessibility.enable_extension", "Aktifkan %1$s", info.getDisplayName()));
                 row.addView(toggle, new LinearLayout.LayoutParams(-2, -2));
                 toggle.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                     public void onCheckedChanged(CompoundButton button, boolean checked) {
@@ -1871,7 +1487,7 @@ public class MainActivity extends Activity implements ExtensionHost {
                         if (previous == checked) return;
                         extensionManager.setEnabled(info, checked);
                         reloadExtensionRuntime();
-                        showToast(info.getDisplayName() + (checked ? " diaktifkan" : " dinonaktifkan"));
+                        showToast(LanguageManager.format(checked ? "toast.extension_enabled" : "toast.extension_disabled", checked ? "%1$s diaktifkan" : "%1$s dinonaktifkan", info.getDisplayName()));
                     }
                 });
                 labels.setOnClickListener(new View.OnClickListener() {
@@ -1891,59 +1507,61 @@ public class MainActivity extends Activity implements ExtensionHost {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
-		scroll.setPadding(dp(6), dp(2), dp(6), dp(2));
+        scroll.setPadding(dp(6), dp(2), dp(6), dp(2));
         AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle("Extension (" + installed.size() + ")")
+            .setTitle(LanguageManager.format("extension.installed_count_title", "Extension (%1$d)", installed.size()))
             .setView(scroll)
-            .setPositiveButton("Pengelola", new DialogInterface.OnClickListener() {
+            .setPositiveButton(LanguageManager.get("action.manage", "Pengelola"), new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface dialog, int which) { showExtensionManager(); }
             })
-            .setNegativeButton("Tutup", null)
+            .setNegativeButton(LanguageManager.get("action.close", "Tutup"), null)
             .create();
         dialogHolder[0] = dialog;
         dialog.show();
     }
 
-    private void showExtensionManager() {
+    void showExtensionManager() {
         extensionManager.refresh();
         final List<ExtensionInfo> installed = extensionManager.getExtensions();
-        LinearLayout body = openPage("Pengelola Ekstensi");
-        addPageAction(body, 0xf093, "Pasang Extension ZIP", "Pilih arsip ZIP melalui pemilih file Android", new View.OnClickListener() { public void onClick(View v) { chooseExtensionZip(); } });
-        addPageAction(body, 0xf188, "Debugger Extension", "Log startup, error BeanShell, dan runtime extension", new View.OnClickListener() { public void onClick(View v) { showExtensionDebugger(); } });
-        if (installed.size() == 0) addPageNote(body, "Belum ada extension yang terpasang. Pilih Pasang Extension ZIP untuk memulai.");
+        LinearLayout body = openPage(LanguageManager.get("page.extension_manager", "Pengelola Ekstensi"));
+        addPageAction(body, 0xf093,LanguageManager.get("action.pasang.extension.zip", "Pasang Extension ZIP"),LanguageManager.get("description.pilih.arsip.zip.melalui.pemilih.file.andro", "Pilih arsip ZIP melalui pemilih file Android"), new View.OnClickListener() { public void onClick(View v) { chooseExtensionZip(); } });
+        addPageAction(body, 0xf188,LanguageManager.get("ui.debugger.extension", "Debugger Extension"),LanguageManager.get("description.log.startup.error.beanshell.dan.runtime.ex", "Log startup, error BeanShell, dan runtime extension"), new View.OnClickListener() { public void onClick(View v) { showExtensionDebugger(); } });
+        if (installed.size() == 0) addPageNote(body,LanguageManager.get("message.belum.ada.extension.yang.terpasang.pilih.p", "Belum ada extension yang terpasang. Pilih Pasang Extension ZIP untuk memulai."));
         for (int i = 0; i < installed.size(); i++) {
             final ExtensionInfo info = installed.get(i);
-            addPageAction(body, 0xf12e, (extensionManager.isEnabled(info) ? "[aktif] " : "[nonaktif] ") + info.getDisplayName(), "v" + info.version + " · " + info.type + " · " + info.id, new View.OnClickListener() { public void onClick(View v) { showExtensionDetails(info); } });
+            addPageAction(body, 0xf12e, (extensionManager.isEnabled(info) ? LanguageManager.get("state.active_prefix", "[aktif] ") : LanguageManager.get("state.inactive_prefix", "[nonaktif] ")) + info.getDisplayName(), LanguageManager.format("extension.version_type_id", "v%1$s · %2$s · %3$s", info.version, info.type, info.id), new View.OnClickListener() { public void onClick(View v) { showExtensionDetails(info); } });
         }
     }
 
     private void showExtensionDetails(final ExtensionInfo info) {
         if (info == null) return;
-        LinearLayout body = openPage("Detail Extension");
+        LinearLayout body = openPage(LanguageManager.get("page.extension_details", "Detail Extension"));
         StringBuilder details = new StringBuilder();
-        details.append(info.getDisplayName()).append("\nid: ").append(info.id).append("\nversi: ").append(info.version).append("\ntipe: ").append(info.type).append("\n");
+        details.append(info.getDisplayName()).append("\n").append(LanguageManager.get("extension.id_label", "ID")).append(": ").append(info.id)
+            .append("\n").append(LanguageManager.get("extension.version_label", "Versi")).append(": ").append(info.version)
+            .append("\n").append(LanguageManager.get("extension.type_label", "Tipe")).append(": ").append(info.type).append("\n");
         if (info.description.length() > 0) details.append("\n").append(info.description).append("\n");
-        details.append("\ndomain lock: ").append(info.domainLockEnabled ? "Aktif" : "none / semua domain").append("\n");
+        details.append("\n").append(LanguageManager.get("extension.domain_lock", "Domain lock")).append(": ").append(info.domainLockEnabled ? LanguageManager.get("state.enabled", "Aktif") : LanguageManager.get("extension.all_domains", "none / semua domain")).append("\n");
         for (int i = 0; i < info.domains.size(); i++) details.append("  - ").append(info.domains.get(i)).append("\n");
-        details.append("\npermission:");
-        if (info.permissions.size() == 0) details.append("\n  tidak meminta permission");
+        details.append("\n").append(LanguageManager.get("extension.permissions_label", "Permission" )).append(":");
+        if (info.permissions.size() == 0) details.append("\n  ").append(LanguageManager.get("extension.no_permissions", "Tidak meminta permission"));
         for (int i = 0; i < info.permissions.size(); i++) {
             String p = info.permissions.get(i);
-            details.append("\n  [").append(extensionManager.hasPermission(info, p) ? "diizinkan" : "ditolak").append("] ").append(p);
+            details.append("\n  [").append(extensionManager.hasPermission(info, p) ? LanguageManager.get("permission.granted", "diizinkan") : LanguageManager.get("permission.denied", "ditolak")).append("] ").append(p);
         }
-        if ("java".equals(info.type)) details.append("\n\ncatatan keamanan: pemeriksaan permission internet/API Android memindai referensi source yang umum dan bukan sandbox sempurna. BeanShell berjalan dalam proses aplikasi; reflection atau pemanggilan tidak langsung dapat melewati pemeriksaan. Instal hanya extension tepercaya.");
+        if ("java".equals(info.type)) details.append("\n\n").append(LanguageManager.get("extension.java_security_note", "Catatan keamanan: pemeriksaan permission internet/API Android memindai referensi source yang umum dan bukan sandbox sempurna. BeanShell berjalan dalam proses aplikasi; reflection atau pemanggilan tidak langsung dapat melewati pemeriksaan. Instal hanya extension tepercaya."));
         addPageNote(body, details.toString());
-        addPageAction(body, extensionManager.isEnabled(info) ? 0xf05e : 0xf058, extensionManager.isEnabled(info) ? "Nonaktifkan Extension" : "Aktifkan Extension", "Ubah status extension", new View.OnClickListener() { public void onClick(View v) {
+        addPageAction(body, extensionManager.isEnabled(info) ? 0xf05e : 0xf058, extensionManager.isEnabled(info) ? LanguageManager.get("extension.disable", "Nonaktifkan Extension") : LanguageManager.get("extension.enable", "Aktifkan Extension"),LanguageManager.get("description.ubah.status.extension", "Ubah status extension"), new View.OnClickListener() { public void onClick(View v) {
             extensionManager.setEnabled(info, !extensionManager.isEnabled(info)); reloadExtensionRuntime(); replaceCurrentPage(); showExtensionDetails(info);
         }});
-        addPageAction(body, 0xf084, "Kelola Permission", "Berikan atau cabut permission yang diminta", new View.OnClickListener() { public void onClick(View v) { showPermissionEditor(info); }});
-        addPageAction(body, 0xf2ed, "Hapus Extension", "Hapus file extension dari penyimpanan internal", new View.OnClickListener() { public void onClick(View v) { confirmDeleteExtension(info); }});
-        addPageAction(body, 0xf188, "Lihat Log Extension", "Tampilkan log milik " + info.id, new View.OnClickListener() { public void onClick(View v) { showExtensionDebugger(info.id); }});
+        addPageAction(body, 0xf084,LanguageManager.get("action.kelola.permission", "Kelola Permission"),LanguageManager.get("extension.permissions_description", "Berikan atau cabut permission yang diminta"), new View.OnClickListener() { public void onClick(View v) { showPermissionEditor(info); }});
+        addPageAction(body, 0xf2ed,LanguageManager.get("action.hapus.extension", "Hapus Extension"),LanguageManager.get("description.hapus.file.extension.dari.penyimpanan.inte", "Hapus file extension dari penyimpanan internal"), new View.OnClickListener() { public void onClick(View v) { confirmDeleteExtension(info); }});
+        addPageAction(body, 0xf188,LanguageManager.get("action.lihat.log.extension", "Lihat Log Extension"), LanguageManager.format("extension.show_logs_description", "Tampilkan log milik %1$s", info.id), new View.OnClickListener() { public void onClick(View v) { showExtensionDebugger(info.id); }});
     }
 
     private void showPermissionEditor(final ExtensionInfo info) {
         if (info.permissions.size() == 0) {
-            showToast("Extension ini tidak meminta permission.");
+            showToast(LanguageManager.get("toast.extension.ini.tidak.meminta.permission", "Extension ini tidak meminta permission."));
             return;
         }
         final String[] permissions = info.permissions.toArray(new String[info.permissions.size()]);
@@ -1953,11 +1571,11 @@ public class MainActivity extends Activity implements ExtensionHost {
             labels[i] = permissions[i] + " — " + ExtensionManager.permissionDescription(permissions[i]);
             checked[i] = extensionManager.hasPermission(info, permissions[i]);
         }
-        new AlertDialog.Builder(this).setTitle("permission: " + info.getDisplayName())
+        new AlertDialog.Builder(this).setTitle(LanguageManager.format("extension.permission_title", "Permission: %1$s", info.getDisplayName()))
             .setMultiChoiceItems(labels, checked, new DialogInterface.OnMultiChoiceClickListener() {
                 public void onClick(DialogInterface dialog, int which, boolean isChecked) { checked[which] = isChecked; }
             })
-            .setPositiveButton("Simpan", new DialogInterface.OnClickListener() {
+            .setPositiveButton(LanguageManager.get("action.save", "Simpan"), new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface dialog, int which) {
                     Set<String> granted = new HashSet<String>();
                     for (int i = 0; i < permissions.length; i++) if (checked[i]) granted.add(permissions[i]);
@@ -1966,15 +1584,15 @@ public class MainActivity extends Activity implements ExtensionHost {
                     replaceCurrentPage();
                     showExtensionDetails(extensionManager.getExtension(info.id));
                 }
-            }).setNegativeButton("Batal", null).show();
+            }).setNegativeButton(LanguageManager.get("action.cancel", "Batal"), null).show();
     }
 
     private void confirmDeleteExtension(final ExtensionInfo info) {
-        new AlertDialog.Builder(this).setTitle("Hapus Extension?")
-            .setMessage("File " + info.getDisplayName() + " akan dihapus dari penyimpanan internal browser.")
-            .setPositiveButton("Hapus", new DialogInterface.OnClickListener() {
+        new AlertDialog.Builder(this).setTitle(LanguageManager.get("dialog.title.hapus.extension", "Hapus Extension?"))
+            .setMessage(LanguageManager.format("extension.uninstall_message", "File %1$s akan dihapus dari penyimpanan internal browser.", info.getDisplayName()))
+            .setPositiveButton(LanguageManager.get("action.delete", "Hapus"), new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface dialog, int which) {
-                    showToast("Menghapus extension...");
+                    showToast(LanguageManager.get("toast.menghapus.extension", "Menghapus extension..."));
                     Thread deleteWorker = new Thread(new Runnable() {
                         public void run() {
                             try {
@@ -1998,14 +1616,14 @@ public class MainActivity extends Activity implements ExtensionHost {
                                             // extension that still exists instead of leaving it inert.
                                             extensionManager.refresh();
                                             reloadExtensionRuntime();
-                                            showError("Hapus Extension", failure);
+                                            showError(LanguageManager.get("error.hapus.extension", "Hapus Extension"), failure);
                                             return;
                                         }
                                         extensionManager.refresh();
                                         reloadExtensionRuntime();
                                         replaceCurrentPage();
                                         showExtensionManager();
-                                        showToast("Extension dan seluruh datanya sudah dihapus.");
+                                        showToast(LanguageManager.get("toast.extension.dan.seluruh.datanya.sudah.dihapu", "Extension dan seluruh datanya sudah dihapus."));
                                     }
                                 });
                             } finally { endBackgroundWork(); }
@@ -2015,7 +1633,7 @@ public class MainActivity extends Activity implements ExtensionHost {
                     beginBackgroundWork();
                     deleteWorker.start();
                 }
-            }).setNegativeButton("Batal", null).show();
+            }).setNegativeButton(LanguageManager.get("action.cancel", "Batal"), null).show();
     }
 
     /** Removes hooks and local resources owned by an extension being uninstalled. */
@@ -2081,8 +1699,8 @@ public class MainActivity extends Activity implements ExtensionHost {
                 Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
                 intent.setType("*/*");
-                startActivityForResult(Intent.createChooser(intent, "pilih zip extension"), REQUEST_INSTALL_ZIP);
-            } catch (Exception second) { showError("pemilih file", second); }
+                startActivityForResult(Intent.createChooser(intent, LanguageManager.get("dialog.choose_extension_zip", "Pilih ZIP extension")), REQUEST_INSTALL_ZIP);
+            } catch (Exception second) { showError(LanguageManager.get("error.pemilih.file", "pemilih file"), second); }
         }
     }
 
@@ -2097,24 +1715,27 @@ public class MainActivity extends Activity implements ExtensionHost {
             checked[i] = false;
         }
         StringBuilder message = new StringBuilder();
-        message.append("nama: ").append(info.getDisplayName()).append("\nversi: ").append(info.version)
-            .append("\ntipe: ").append(info.type).append("\nid: ").append(info.id).append("\n\n");
-        message.append(info.description.length() == 0 ? "tanpa deskripsi" : info.description);
-        message.append("\n\ndomain lock: ").append(info.domainLockEnabled ? info.domains.toString() : "none (semua domain)");
+        message.append(LanguageManager.format("extension.install_name", "Nama: %1$s", info.getDisplayName()))
+            .append("\n").append(LanguageManager.format("extension.install_version", "Versi: %1$s", info.version))
+            .append("\n").append(LanguageManager.format("extension.install_type", "Tipe: %1$s", info.type))
+            .append("\n").append(LanguageManager.format("extension.install_id", "ID: %1$s", info.id)).append("\n\n");
+        message.append(info.description.length() == 0 ? LanguageManager.get("extension.no_description", "Tanpa deskripsi") : info.description);
+        message.append("\n\n").append(LanguageManager.get("extension.domain_lock_label", "Kunci domain: "))
+            .append(info.domainLockEnabled ? info.domains.toString() : LanguageManager.get("extension.all_domains", "Semua domain"));
         if ("java".equals(info.type)) {
-            message.append("\n\nperingatan: permission internet dan Android API diperiksa lewat pemindaian source untuk pola yang umum. Ini bukan sandbox sempurna; reflection atau pemanggilan tidak langsung dapat melewatinya. Pasang hanya extension dari sumber tepercaya.");
+            message.append("\n\n").append(LanguageManager.get("extension.java_permission_warning", "Peringatan: izin internet dan Android API diperiksa melalui pemindaian pola source yang umum. Ini bukan sandbox sempurna; reflection atau pemanggilan tidak langsung dapat melewati pemeriksaan. Pasang hanya extension dari sumber tepercaya."));
         }
-        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle("Pasang Extension").setMessage(message.toString());
+        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(LanguageManager.get("dialog.title.pasang.extension", "Pasang Extension")).setMessage(message.toString());
         if (permissions.length > 0) {
             builder.setMultiChoiceItems(labels, checked, new DialogInterface.OnMultiChoiceClickListener() {
                 public void onClick(DialogInterface dialog, int which, boolean isChecked) { checked[which] = isChecked; }
             });
         }
-        builder.setPositiveButton("pasang", new DialogInterface.OnClickListener() {
+        builder.setPositiveButton(LanguageManager.get("action.install", "pasang"), new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface dialog, int which) {
                 final Set<String> granted = new HashSet<String>();
                 for (int i = 0; i < permissions.length; i++) if (checked[i]) granted.add(permissions[i]);
-                showToast("Memasang extension...");
+                showToast(LanguageManager.get("toast.memasang.extension", "Memasang extension..."));
                 Thread commitWorker = new Thread(new Runnable() {
                     public void run() {
                         try {
@@ -2128,11 +1749,11 @@ public class MainActivity extends Activity implements ExtensionHost {
                                     if (activityDestroyed) return;
                                     if (failure != null) {
                                         extensionManager.cancelInstall(prepared);
-                                        showError("instalasi extension", failure);
+                                        showError(LanguageManager.get("error.instalasi.extension", "instalasi extension"), failure);
                                         return;
                                     }
                                     reloadExtensionRuntime();
-                                    showToast("Extension terpasang: " + info.getDisplayName());
+                                    showToast(LanguageManager.format("toast.extension_installed", "Extension terpasang: %1$s", info.getDisplayName()));
                                     showExtensionManager();
                                 }
                             });
@@ -2143,7 +1764,7 @@ public class MainActivity extends Activity implements ExtensionHost {
                 beginBackgroundWork();
                 commitWorker.start();
             }
-        }).setNegativeButton("Batal", new DialogInterface.OnClickListener() {
+        }).setNegativeButton(LanguageManager.get("action.cancel", "Batal"), new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface dialog, int which) {
                 extensionManager.cancelInstall(prepared);
                 pendingInstall = null;
@@ -2244,49 +1865,14 @@ public class MainActivity extends Activity implements ExtensionHost {
         worker.start();
     }
 
-    private boolean containsAny(String text, String[] tokens) {
-        if (text == null || tokens == null) return false;
-        for (int i = 0; i < tokens.length; i++) if (text.indexOf(tokens[i]) >= 0) return true;
-        return false;
-    }
-
-    private boolean isNetworkClassName(String name) {
-        return name.startsWith("java.net.") || name.startsWith("javax.net.") ||
-            name.startsWith("java.nio.channels.Socket") || name.startsWith("okhttp3.") || name.startsWith("retrofit2.");
-    }
-
-    private boolean isFileClassName(String name) {
-        return name.equals("java.io.File") || name.startsWith("java.io.FileInputStream") ||
-            name.startsWith("java.io.FileOutputStream") || name.startsWith("java.io.FileReader") ||
-            name.startsWith("java.io.FileWriter") || name.startsWith("java.io.RandomAccessFile") ||
-            name.startsWith("java.nio.file.");
-    }
-
-    private boolean isReflectionClassName(String name) {
-        return name.startsWith("java.lang.reflect.") || name.equals("java.lang.ClassLoader");
-    }
-
-    private boolean isProcessExecutionClassName(String name) {
-        return name.equals("java.lang.Runtime") || name.equals("java.lang.ProcessBuilder");
-    }
-
     private void runBeanShellExtension(final ExtensionInfo info) {
         try {
             final String source = extensionManager.readScript(info, info.javaEntry);
-            String lowerSource = source.toLowerCase(Locale.US);
-            boolean needsInternet = containsAny(lowerSource, new String[]{
-                "import java.net.", "java.net.", "javax.net.", "httpurlconnection", "httpsurlconnection", "socketchannel", "okhttp", "retrofit", "webview.loadurl(", "downloadmanager.enqueue", "android.net.http"
-            });
-            boolean needsAndroidApi = lowerSource.indexOf("android.") >= 0;
-            boolean needsFileAccess = containsAny(lowerSource, new String[]{
-                "java.io.file", "fileinputstream", "fileoutputstream", "filereader", "filewriter", "randomaccessfile", "java.nio.file."
-            });
-            boolean needsReflection = containsAny(lowerSource, new String[]{
-                "java.lang.reflect.", "forname(", "forname (", "getclass(", "getclass (", "getmethod(", "getmethod (", "getdeclaredmethod", "getdeclaredfield", "classloader", "loadclass("
-            });
-            boolean needsProcessExecution = containsAny(lowerSource, new String[]{
-                "runtime.getruntime", "processbuilder", "java.lang.runtime"
-            });
+            boolean needsInternet = ExtensionPermissionScanner.needsInternet(source);
+            boolean needsAndroidApi = ExtensionPermissionScanner.needsAndroidApi(source);
+            boolean needsFileAccess = ExtensionPermissionScanner.needsFileAccess(source);
+            boolean needsReflection = ExtensionPermissionScanner.needsReflection(source);
+            boolean needsProcessExecution = ExtensionPermissionScanner.needsProcessExecution(source);
             if (needsInternet && !extensionManager.hasPermission(info, "internet")) {
                 extensionLog(info.id, "runtime ditolak: script terindikasi memakai akses jaringan, tetapi permission 'internet' belum diaktifkan dan dideklarasikan di manifest.json.");
                 return;
@@ -2314,19 +1900,19 @@ public class MainActivity extends Activity implements ExtensionHost {
             ClassLoader permissionLoader = new ClassLoader(MainActivity.class.getClassLoader()) {
                 @Override
                 protected synchronized Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-                    if (MainActivity.this.isNetworkClassName(name) && !extensionManager.hasPermission(info, "internet")) {
+                    if (ExtensionPermissionScanner.isNetworkClassName(name) && !extensionManager.hasPermission(info, "internet")) {
                         throw new NoClassDefFoundError("permission extension dibutuhkan: internet (" + name + ")");
                     }
                     if (name.startsWith("android.") && !extensionManager.hasPermission(info, "androidApi") && !extensionManager.hasPermission(info, "androidClasses")) {
                         throw new NoClassDefFoundError("permission extension dibutuhkan: androidApi (" + name + ")");
                     }
-                    if (MainActivity.this.isFileClassName(name) && !extensionManager.hasPermission(info, "fileAccess")) {
+                    if (ExtensionPermissionScanner.isFileClassName(name) && !extensionManager.hasPermission(info, "fileAccess")) {
                         throw new NoClassDefFoundError("permission extension dibutuhkan: fileAccess (" + name + ")");
                     }
-                    if (MainActivity.this.isReflectionClassName(name) && !extensionManager.hasPermission(info, "reflection")) {
+                    if (ExtensionPermissionScanner.isReflectionClassName(name) && !extensionManager.hasPermission(info, "reflection")) {
                         throw new NoClassDefFoundError("permission extension dibutuhkan: reflection (" + name + ")");
                     }
-                    if (MainActivity.this.isProcessExecutionClassName(name) && !extensionManager.hasPermission(info, "processExecution")) {
+                    if (ExtensionPermissionScanner.isProcessExecutionClassName(name) && !extensionManager.hasPermission(info, "processExecution")) {
                         throw new NoClassDefFoundError("permission extension dibutuhkan: processExecution (" + name + ")");
                     }
                     return super.loadClass(name, resolve);
@@ -2371,7 +1957,7 @@ public class MainActivity extends Activity implements ExtensionHost {
         }
         if (requestCode == REQUEST_INSTALL_ZIP && resultCode == RESULT_OK && data != null && data.getData() != null) {
             final Uri zipUri = data.getData();
-            showToast("Memeriksa arsip extension...");
+            showToast(LanguageManager.get("toast.memeriksa.arsip.extension", "Memeriksa arsip extension..."));
             Thread installer = new Thread(new Runnable() {
                 public void run() {
                     try {
@@ -2394,9 +1980,9 @@ public class MainActivity extends Activity implements ExtensionHost {
                                     if (result != null) extensionManager.cancelInstall(result);
                                     return;
                                 }
-                                if (failure != null) showError("membaca zip extension", failure);
+                                if (failure != null) showError(LanguageManager.get("error.membaca.zip.extension", "membaca zip extension"), failure);
                                 else if (result != null) reviewInstall(result);
-                                else showToast("ZIP extension tidak menghasilkan data instalasi.");
+                                else showToast(LanguageManager.get("toast.zip.extension.tidak.menghasilkan.data.inst", "ZIP extension tidak menghasilkan data instalasi."));
                             }
                         });
                     } finally { endBackgroundWork(); }
@@ -2431,7 +2017,7 @@ public class MainActivity extends Activity implements ExtensionHost {
             return;
         }
         if (requestCode == REQUEST_STORAGE_PERMISSION) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) showToast("Izin penyimpanan untuk unduhan diberikan.");
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) showToast(LanguageManager.get("toast.izin.penyimpanan.untuk.unduhan.diberikan", "Izin penyimpanan untuk unduhan diberikan."));
         }
     }
 
@@ -2441,31 +2027,31 @@ public class MainActivity extends Activity implements ExtensionHost {
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
             String filename = URLUtil.guessFileName(url, contentDisposition, mimeType);
             request.setTitle(filename);
-            request.setDescription("download dari Chromitext");
+            request.setDescription(LanguageManager.get("downloads.notification_description", "Unduhan dari Chromitext"));
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
             if (mimeType != null) request.setMimeType(mimeType);
             if (userAgent != null) request.addRequestHeader("User-Agent", userAgent);
             request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,
                 filename);
             manager.enqueue(request);
-            showToast("Unduhan ditambahkan ke Download Manager Android.");
+            showToast(LanguageManager.get("toast.unduhan.ditambahkan.ke.download.manager.an", "Unduhan ditambahkan ke Download Manager Android."));
         } catch (Exception error) {
-            showError("download", error);
+            showError(LanguageManager.get("error.download", "download"), error);
         }
     }
 
-    private void toggleJavascript() {
+    void toggleJavascript() {
         javascriptEnabled = !javascriptEnabled;
         database.putBoolean("javascript_enabled", javascriptEnabled);
         for (int i = 0; i < tabs.size(); i++) tabs.get(i).webView.getSettings().setJavaScriptEnabled(javascriptEnabled);
-        showToast("JavaScript " + (javascriptEnabled ? "Aktif" : "Nonaktif"));
+        showToast(LanguageManager.format("toast.javascript_status", "JavaScript %1$s", javascriptEnabled ? LanguageManager.get("state.enabled", "Aktif") : LanguageManager.get("state.disabled", "Nonaktif")));
         if (activeTab != null && !activeTab.url.startsWith("about:blank")) activeTab.webView.reload();
     }
 
-    private void clearBrowserData() {
-        new AlertDialog.Builder(this).setTitle("Hapus Data Browser")
-            .setMessage("Hapus cache WebView, cookie, dan data situs? Bookmark dan extension tidak akan dihapus.")
-            .setPositiveButton("Hapus", new DialogInterface.OnClickListener() {
+    void clearBrowserData() {
+        new AlertDialog.Builder(this).setTitle(LanguageManager.get("dialog.title.hapus.data.browser", "Hapus Data Browser"))
+            .setMessage(LanguageManager.get("dialog.message.hapus.cache.webview.cookie.dan.data.situs", "Hapus cache WebView, cookie, dan data situs? Bookmark dan extension tidak akan dihapus."))
+            .setPositiveButton(LanguageManager.get("action.delete", "Hapus"), new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface dialog, int which) {
                     for (int i = 0; i < tabs.size(); i++) tabs.get(i).webView.clearCache(true);
                     CookieManager cookies = CookieManager.getInstance();
@@ -2475,55 +2061,18 @@ public class MainActivity extends Activity implements ExtensionHost {
                         cookies.removeAllCookie();
                     }
                     WebViewDatabaseHelper.clear(MainActivity.this);
-                    showToast("Data situs dibersihkan.");
+                    showToast(LanguageManager.get("toast.data.situs.dibersihkan", "Data situs dibersihkan."));
                 }
-            }).setNegativeButton("Batal", null).show();
+            }).setNegativeButton(LanguageManager.get("action.cancel", "Batal"), null).show();
     }
 
-    private void showBookmarks() {
-        final ArrayList<String> entries = readLines("bookmarks");
-        LinearLayout body = openPage("Bookmark");
-        addPageAction(body, 0xf067, "Simpan Halaman Saat Ini", activeTab == null ? "Tidak ada tab aktif." : activeTab.url, new View.OnClickListener() { public void onClick(View v) { addCurrentBookmark(); replaceCurrentPage(); showBookmarks(); } });
-        if (entries.size() == 0) addPageNote(body, "Belum ada bookmark.");
-        for (int i = entries.size() - 1; i >= 0; i--) {
-            final String[] pair = entries.get(i).split("\t", 2);
-            if (pair.length != 2) continue;
-            addPageAction(body, 0xf02e, pair[0], pair[1], new View.OnClickListener() { public void onClick(View v) { navigate(pair[1]); backFromPage(); }});
-            addPageAction(body, 0xf2ed, "Hapus Bookmark", pair[0], new View.OnClickListener() { public void onClick(View v) { database.deleteBookmark(pair[1]); replaceCurrentPage(); showBookmarks(); }});
-        }
-    }
+    void showBookmarks() { libraryPagesController.showBookmarks(); }
 
-    private void addCurrentBookmark() {
-        if (activeTab == null || !UrlResolver.isWebUrl(activeTab.url)) { showToast("Halaman ini tidak dapat disimpan sebagai bookmark."); return; }
-        database.addBookmark(activeTab.title, activeTab.url);
-        showToast("Bookmark disimpan.");
-    }
+    private void addCurrentBookmark() { libraryPagesController.addCurrentBookmark(); }
 
-    private void showHistory() {
-        final ArrayList<String> entries = readLines("history");
-        Collections.reverse(entries);
-        LinearLayout body = openPage("Riwayat Penjelajahan");
-        addPageAction(body, 0xf2ed, "Hapus Seluruh Riwayat", "Hapus riwayat penjelajahan", new View.OnClickListener() { public void onClick(View v) {
-            new AlertDialog.Builder(MainActivity.this).setTitle("Hapus Riwayat Penjelajahan?").setMessage("Seluruh riwayat penjelajahan akan dihapus.")
-                .setPositiveButton("Hapus", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { database.clearHistory(); replaceCurrentPage(); showHistory(); }}).setNegativeButton("Batal", null).show();
-        }});
-        if (entries.size() == 0) addPageNote(body, "Riwayat penjelajahan masih kosong.");
-        for (int i = 0; i < entries.size(); i++) {
-            final String[] pair = entries.get(i).split("\t", 2);
-            if (pair.length != 2) continue;
-            addPageAction(body, 0xf1da, pair[0], pair[1], new View.OnClickListener() { public void onClick(View v) { navigate(pair[1]); backFromPage(); }});
-            addPageAction(body, 0xf2ed, "Hapus Entri", pair[1], new View.OnClickListener() { public void onClick(View v) { database.deleteHistoryUrl(pair[1]); replaceCurrentPage(); showHistory(); }});
-        }
-    }
+    void showHistory() { libraryPagesController.showHistory(); }
 
-    private void showDownloadsInfo() {
-        LinearLayout body = openPage("Unduhan");
-        addPageNote(body, "Unduhan dikelola oleh Download Manager Android. Buka aplikasi Downloads/Files untuk melihat file yang diunduh.");
-        addPageAction(body, 0xf019, "Buka Unduhan", "Buka aplikasi pengelola unduhan Android", new View.OnClickListener() { public void onClick(View v) {
-            try { startActivity(new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)); }
-            catch (Exception error) { showToast("Aplikasi pengelola unduhan tidak tersedia."); }
-        }});
-    }
+    void showDownloadsInfo() { libraryPagesController.showDownloadsInfo(); }
 
     private void saveHistory(String title, String url) {
         if (!UrlResolver.isWebUrl(url)) return;
@@ -2535,7 +2084,7 @@ public class MainActivity extends Activity implements ExtensionHost {
     }
 
     private void hideKeyboard() {
-        hideAddressSuggestions();
+        addressSuggestionController.hide();
         try {
             InputMethodManager manager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
             manager.hideSoftInputFromWindow(addressBar.getWindowToken(), 0);
@@ -2543,13 +2092,13 @@ public class MainActivity extends Activity implements ExtensionHost {
         } catch (Exception ignored) { }
     }
 
-    private void showToast(String message) {
+    void showToast(String message) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
     }
 
     private void showError(String title, Exception error) {
-        String message = error == null ? "error tidak diketahui" : error.getClass().getSimpleName() + ": " + String.valueOf(error.getMessage());
-        new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show();
+        String message = error == null ? LanguageManager.get("error.unknown", "Error tidak diketahui") : error.getClass().getSimpleName() + ": " + String.valueOf(error.getMessage());
+        new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton(LanguageManager.get("action.ok", "OK"), null).show();
     }
 
     private String throwableToString(Throwable error) {
@@ -2744,7 +2293,7 @@ public class MainActivity extends Activity implements ExtensionHost {
 
     @Override
     public void onBackPressed() {
-        if (addressSuggestionPopup != null && addressSuggestionPopup.isShowing()) { hideAddressSuggestions(); return; }
+        if (addressSuggestionController != null && addressSuggestionController.isShowing()) { addressSuggestionController.hide(); return; }
         if (customViewActive) { exitCustomView(true); return; }
         if (activePageView != null) { backFromPage(); return; }
         if (debuggerOverlay != null && debuggerOverlay.isPanelVisible()) { hideDebuggerPanel(); return; }
@@ -2756,7 +2305,7 @@ public class MainActivity extends Activity implements ExtensionHost {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
-        hideAddressSuggestions();
+        addressSuggestionController.hide();
         extensionRuntimeGeneration++;
         if (customViewActive) exitCustomView(false);
         for (int i = 0; i < tabs.size(); i++) {

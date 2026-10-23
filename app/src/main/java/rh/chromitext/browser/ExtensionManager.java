@@ -253,9 +253,9 @@ public class ExtensionManager {
     }
 
     public PreparedInstall prepareInstall(InputStream source) throws Exception {
-        if (source == null) throw new IOException("file zip kosong");
+        if (source == null) throw new IOException(LanguageManager.get("error.extension.zip_empty", "file zip kosong"));
         File staging = new File(context.getFilesDir(), ".install_" + System.currentTimeMillis());
-        if (!staging.mkdirs()) throw new IOException("gagal membuat direktori staging");
+        if (!staging.mkdirs()) throw new IOException(LanguageManager.get("error.extension.staging_directory", "gagal membuat direktori staging"));
         boolean success = false;
         try {
             ZipInputStream zip = new ZipInputStream(new BufferedInputStream(source));
@@ -265,28 +265,28 @@ public class ExtensionManager {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
                 entryCount++;
-                if (entryCount > MAX_ENTRIES) throw new IOException("arsip memiliki terlalu banyak entri");
+                if (entryCount > MAX_ENTRIES) throw new IOException(LanguageManager.get("error.extension.too_many_entries", "arsip memiliki terlalu banyak entri"));
                 String name = normalizeZipPath(entry.getName());
                 if (name.length() == 0) { zip.closeEntry(); continue; }
                 File out = new File(staging, name);
                 String basePath = staging.getCanonicalPath() + File.separator;
                 String outPath = out.getCanonicalPath();
-                if (!outPath.startsWith(basePath)) throw new IOException("path zip keluar dari direktori extension");
+                if (!outPath.startsWith(basePath)) throw new IOException(LanguageManager.get("error.extension.zip_path_outside", "path zip keluar dari direktori extension"));
                 if (entry.isDirectory()) {
-                    if (!out.exists() && !out.mkdirs()) throw new IOException("gagal membuat folder extension");
+                    if (!out.exists() && !out.mkdirs()) throw new IOException(LanguageManager.get("error.extension.create_directory", "gagal membuat folder extension"));
                     zip.closeEntry();
                     continue;
                 }
                 File parent = out.getParentFile();
-                if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("gagal membuat folder file");
+                if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException(LanguageManager.get("error.extension.create_file_parent", "gagal membuat folder file"));
                 BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(out));
                 long fileSize = 0L;
                 int read;
                 while ((read = zip.read(buffer)) != -1) {
                     fileSize += read;
                     total += read;
-                    if (fileSize > MAX_FILE_SIZE) throw new IOException("file dalam zip terlalu besar");
-                    if (total > MAX_TOTAL_UNZIPPED) throw new IOException("ukuran hasil ekstraksi melewati batas 25 MB");
+                    if (fileSize > MAX_FILE_SIZE) throw new IOException(LanguageManager.get("error.extension.file_too_large", "file dalam zip terlalu besar"));
+                    if (total > MAX_TOTAL_UNZIPPED) throw new IOException(LanguageManager.get("error.extension.extraction_limit", "ukuran hasil ekstraksi melewati batas 25 MB"));
                     output.write(buffer, 0, read);
                 }
                 output.close();
@@ -294,7 +294,7 @@ public class ExtensionManager {
             }
             zip.close();
             ExtensionInfo info = parseManifest(staging);
-            if (info == null) throw new IOException("manifest.json tidak ditemukan atau tidak valid");
+            if (info == null) throw new IOException(LanguageManager.get("error.extension.manifest_invalid", "manifest.json tidak ditemukan atau tidak valid"));
             validateManifestFiles(staging, info);
             PreparedInstall prepared = new PreparedInstall();
             prepared.info = info;
@@ -308,20 +308,20 @@ public class ExtensionManager {
 
     public synchronized void commitInstall(PreparedInstall prepared, Set<String> allowedPermissions) throws Exception {
         if (prepared == null || prepared.consumed || prepared.info == null || prepared.stagingDirectory == null) {
-            throw new IOException("data instalasi tidak valid");
+            throw new IOException(LanguageManager.get("error.extension.install_data_invalid", "data instalasi tidak valid"));
         }
         String id = prepared.info.id;
-        if (!id.matches("[A-Za-z0-9._-]{1,128}")) throw new IOException("id extension tidak valid");
+        if (!id.matches("[A-Za-z0-9._-]{1,128}")) throw new IOException(LanguageManager.get("error.extension.id_invalid", "id extension tidak valid"));
         File destination = new File(root, id);
         File backup = new File(context.getFilesDir(), ".backup_" + id + "_" + System.currentTimeMillis());
         boolean movedOld = false;
         if (destination.exists()) {
-            if (!destination.renameTo(backup)) throw new IOException("gagal memindahkan extension versi lama");
+            if (!destination.renameTo(backup)) throw new IOException(LanguageManager.get("error.extension.backup_failed", "gagal memindahkan extension versi lama"));
             movedOld = true;
         }
         if (!prepared.stagingDirectory.renameTo(destination)) {
             if (movedOld) backup.renameTo(destination);
-            throw new IOException("gagal memasang file extension");
+            throw new IOException(LanguageManager.get("error.extension.install_failed", "gagal memasang file extension"));
         }
         if (movedOld) deleteRecursive(backup);
         prepared.consumed = true;
@@ -344,13 +344,13 @@ public class ExtensionManager {
      * from the id inside its manifest.
      */
     public synchronized void deleteExtension(ExtensionInfo info) throws IOException {
-        if (info == null) throw new IOException("extension tidak ditemukan");
+        if (info == null) throw new IOException(LanguageManager.get("error.extension.not_found", "extension tidak ditemukan"));
         String id = info.id == null ? "" : info.id.trim();
-        if (!id.matches("[A-Za-z0-9._-]{1,128}")) throw new IOException("id extension tidak valid");
+        if (!id.matches("[A-Za-z0-9._-]{1,128}")) throw new IOException(LanguageManager.get("error.extension.id_invalid", "id extension tidak valid"));
 
         ArrayList<File> targets = new ArrayList<File>();
         File[] dirs = root.listFiles();
-        if (dirs == null && root.exists()) throw new IOException("gagal membaca direktori extension");
+        if (dirs == null && root.exists()) throw new IOException(LanguageManager.get("error.extension.read_directory", "gagal membaca direktori extension"));
         if (dirs != null) {
             for (int i = 0; i < dirs.length; i++) {
                 File candidate = dirs[i];
@@ -367,15 +367,15 @@ public class ExtensionManager {
         for (int i = 0; i < targets.size(); i++) {
             File target = targets.get(i);
             if (!deleteRecursiveStrict(target)) {
-                throw new IOException("sebagian file extension gagal dihapus: " + target.getName());
+                throw new IOException(LanguageManager.format("error.extension.partial_delete", "sebagian file extension gagal dihapus: %1$s", target.getName()));
             }
-            if (target.exists()) throw new IOException("folder extension masih tersisa: " + target.getName());
+            if (target.exists()) throw new IOException(LanguageManager.format("error.extension.folder_remains", "folder extension masih tersisa: %1$s", target.getName()));
         }
 
         // Verify the files are no longer discoverable before erasing metadata.
         refresh();
         if (getExtension(id) != null) {
-            throw new IOException("folder extension masih terdeteksi setelah penghapusan: " + id);
+            throw new IOException(LanguageManager.format("error.extension.folder_detected", "folder extension masih terdeteksi setelah penghapusan: %1$s", id));
         }
 
         // Preserve records belonging to surviving extensions, including ids that
@@ -443,24 +443,24 @@ public class ExtensionManager {
     }
 
     public static String permissionDescription(String permission) {
-        if ("webNavigation".equals(permission)) return "memantau navigasi dan halaman aktif";
-        if ("navigationBlocking".equals(permission)) return "memblokir navigasi ke domain tertentu";
-        if ("webRequest".equals(permission)) return "memantau metadata request jaringan yang tersedia";
-        if ("webRequestBlocking".equals(permission)) return "memblokir request jaringan yang didukung";
-        if ("scripting".equals(permission)) return "menyuntikkan javascript ke halaman web";
-        if ("userAgent".equals(permission)) return "mengubah user-agent berdasarkan domain";
-        if ("tabs".equals(permission)) return "membaca dan mengelola tab browser";
-        if ("storage".equals(permission)) return "menyimpan data extension";
-        if ("nativeBridge".equals(permission)) return "menyediakan fungsi native untuk origin yang diizinkan";
-        if ("localServer".equals(permission)) return "menjalankan server lokal pada 127.0.0.1";
-        if ("internet".equals(permission)) return "akses jaringan internet melalui kode Java extension";
-        if ("androidApi".equals(permission)) return "menggunakan API Android seperti perangkat, service, dan sistem";
-        if ("reflection".equals(permission)) return "memakai reflection atau pemuatan kelas secara dinamis";
-        if ("processExecution".equals(permission)) return "menjalankan proses/perintah sistem melalui Java";
-        if ("androidClasses".equals(permission)) return "akses kelas android melalui runtime (izin lama)";
-        if ("appClasses".equals(permission)) return "akses kelas aplikasi yang tersedia";
-        if ("fileAccess".equals(permission)) return "akses file langsung melalui kelas Java";
-        return "kemampuan extension: " + permission;
+        if ("webNavigation".equals(permission)) return LanguageManager.get("permission.web_navigation", "memantau navigasi dan halaman aktif");
+        if ("navigationBlocking".equals(permission)) return LanguageManager.get("permission.navigation_blocking", "memblokir navigasi ke domain tertentu");
+        if ("webRequest".equals(permission)) return LanguageManager.get("permission.web_request", "memantau metadata request jaringan yang tersedia");
+        if ("webRequestBlocking".equals(permission)) return LanguageManager.get("permission.web_request_blocking", "memblokir request jaringan yang didukung");
+        if ("scripting".equals(permission)) return LanguageManager.get("permission.scripting", "menyuntikkan JavaScript ke halaman web");
+        if ("userAgent".equals(permission)) return LanguageManager.get("permission.user_agent", "mengubah User-Agent berdasarkan domain");
+        if ("tabs".equals(permission)) return LanguageManager.get("permission.tabs", "membaca dan mengelola tab browser");
+        if ("storage".equals(permission)) return LanguageManager.get("permission.storage", "menyimpan data extension");
+        if ("nativeBridge".equals(permission)) return LanguageManager.get("permission.native_bridge", "menyediakan fungsi native untuk origin yang diizinkan");
+        if ("localServer".equals(permission)) return LanguageManager.get("permission.local_server", "menjalankan server lokal pada 127.0.0.1");
+        if ("internet".equals(permission)) return LanguageManager.get("permission.internet", "akses jaringan internet melalui kode Java extension");
+        if ("androidApi".equals(permission)) return LanguageManager.get("permission.android_api", "menggunakan API Android seperti perangkat, service, dan sistem");
+        if ("reflection".equals(permission)) return LanguageManager.get("permission.reflection", "memakai reflection atau pemuatan kelas secara dinamis");
+        if ("processExecution".equals(permission)) return LanguageManager.get("permission.process_execution", "menjalankan proses/perintah sistem melalui Java");
+        if ("androidClasses".equals(permission)) return LanguageManager.get("permission.android_classes_legacy", "akses kelas Android melalui runtime (izin lama)");
+        if ("appClasses".equals(permission)) return LanguageManager.get("permission.app_classes", "akses kelas aplikasi yang tersedia");
+        if ("fileAccess".equals(permission)) return LanguageManager.get("permission.file_access", "akses file langsung melalui kelas Java");
+        return LanguageManager.format("permission.other", "kemampuan extension: %1$s", permission);
     }
 
     private ExtensionInfo parseManifest(File directory) throws Exception {
@@ -468,7 +468,7 @@ public class ExtensionManager {
         if (!manifest.isFile()) return null;
         JSONObject json = new JSONObject(readFile(manifest, 1024 * 1024));
         int manifestVersion = json.optInt("manifest_version", -1);
-        if (manifestVersion != 1) throw new IOException("manifest_version tidak didukung");
+        if (manifestVersion != 1) throw new IOException(LanguageManager.get("error.extension.manifest_version", "manifest_version tidak didukung"));
         ExtensionInfo info = new ExtensionInfo();
         info.id = json.optString("id", "");
         info.name = json.optString("name", info.id);
@@ -477,28 +477,28 @@ public class ExtensionManager {
         info.description = json.optString("description", "");
         info.author = json.optString("author", "");
         info.directory = directory;
-        if (!info.id.matches("[A-Za-z0-9._-]{1,128}")) throw new IOException("id extension tidak valid");
-        if (!"java".equals(info.type) && !"javascript".equals(info.type)) throw new IOException("type harus java atau javascript");
+        if (!info.id.matches("[A-Za-z0-9._-]{1,128}")) throw new IOException(LanguageManager.get("error.extension.id_invalid", "id extension tidak valid"));
+        if (!"java".equals(info.type) && !"javascript".equals(info.type)) throw new IOException(LanguageManager.get("error.extension.type_invalid", "type harus java atau javascript"));
 
         JSONObject entryObject = json.optJSONObject("entry");
         if ("javascript".equals(info.type)) {
             String jsEntry = json.optString("entry", "");
             if (entryObject != null) jsEntry = entryObject.optString("javascript", "");
-            if (jsEntry.length() == 0) throw new IOException("entry javascript belum ditentukan");
+            if (jsEntry.length() == 0) throw new IOException(LanguageManager.get("error.extension.js_entry_missing", "entry javascript belum ditentukan"));
             jsEntry = validateRelativePath(jsEntry);
-            if (!jsEntry.startsWith("script/javascript/") || !jsEntry.toLowerCase(Locale.US).endsWith(".js")) throw new IOException("entry javascript harus berada di script/javascript/ dan berakhiran .js");
+            if (!jsEntry.startsWith("script/javascript/") || !jsEntry.toLowerCase(Locale.US).endsWith(".js")) throw new IOException(LanguageManager.get("error.extension.js_entry_path", "entry javascript harus berada di script/javascript/ dan berakhiran .js"));
             info.javascriptEntries.add(jsEntry);
         } else {
-            if (entryObject == null) throw new IOException("extension java harus memakai entry berbentuk object");
+            if (entryObject == null) throw new IOException(LanguageManager.get("error.extension.java_entry_object", "extension java harus memakai entry berbentuk object"));
             info.javaEntry = validateRelativePath(entryObject.optString("java", ""));
-            if (info.javaEntry.length() == 0) throw new IOException("entry.java belum ditentukan");
-            if (!info.javaEntry.startsWith("script/java/") || !info.javaEntry.toLowerCase(Locale.US).endsWith(".java")) throw new IOException("entry java harus berada di script/java/ dan berakhiran .java");
+            if (info.javaEntry.length() == 0) throw new IOException(LanguageManager.get("error.extension.java_entry_missing", "entry.java belum ditentukan"));
+            if (!info.javaEntry.startsWith("script/java/") || !info.javaEntry.toLowerCase(Locale.US).endsWith(".java")) throw new IOException(LanguageManager.get("error.extension.java_entry_path", "entry java harus berada di script/java/ dan berakhiran .java"));
             JSONArray scripts = entryObject.optJSONArray("javascript");
             if (scripts != null) {
                 for (int i = 0; i < scripts.length(); i++) {
                     String path = validateRelativePath(scripts.optString(i, ""));
                     if (path.length() > 0) {
-                        if (!path.startsWith("script/javascript/") || !path.toLowerCase(Locale.US).endsWith(".js")) throw new IOException("entry javascript harus berada di script/javascript/ dan berakhiran .js");
+                        if (!path.startsWith("script/javascript/") || !path.toLowerCase(Locale.US).endsWith(".js")) throw new IOException(LanguageManager.get("error.extension.js_entry_path", "entry javascript harus berada di script/javascript/ dan berakhiran .js"));
                         info.javascriptEntries.add(path);
                     }
                 }
@@ -525,7 +525,7 @@ public class ExtensionManager {
                 }
             }
             if (info.domainLockEnabled && info.domains.size() == 0) {
-                throw new IOException("domain_lock aktif tetapi daftar domains kosong");
+                throw new IOException(LanguageManager.get("error.extension.domains_empty", "domain_lock aktif tetapi daftar domains kosong"));
             }
         }
         return info;
@@ -533,35 +533,35 @@ public class ExtensionManager {
 
     private void validateManifestFiles(File base, ExtensionInfo info) throws Exception {
         if ("java".equals(info.type)) {
-            if (!resolveInside(base, info.javaEntry).isFile()) throw new IOException("entry java tidak ditemukan: " + info.javaEntry);
+            if (!resolveInside(base, info.javaEntry).isFile()) throw new IOException(LanguageManager.format("error.extension.java_entry_not_found", "entry java tidak ditemukan: %1$s", info.javaEntry));
         }
         if ("javascript".equals(info.type) && info.javascriptEntries.size() == 0) {
-            throw new IOException("entry javascript kosong");
+            throw new IOException(LanguageManager.get("error.extension.js_entries_empty", "entry javascript kosong"));
         }
         for (int i = 0; i < info.javascriptEntries.size(); i++) {
             String path = info.javascriptEntries.get(i);
-            if (!resolveInside(base, path).isFile()) throw new IOException("entry javascript tidak ditemukan: " + path);
+            if (!resolveInside(base, path).isFile()) throw new IOException(LanguageManager.format("error.extension.js_entry_not_found", "entry javascript tidak ditemukan: %1$s", path));
         }
     }
 
     private static String validateRelativePath(String path) throws IOException {
-        if (path == null) throw new IOException("path kosong");
+        if (path == null) throw new IOException(LanguageManager.get("error.extension.path_empty", "path kosong"));
         String value = path.trim().replace('\\', '/');
-        if (value.length() == 0 || value.startsWith("/") || value.indexOf(':') >= 0) throw new IOException("path script tidak valid");
+        if (value.length() == 0 || value.startsWith("/") || value.indexOf(':') >= 0) throw new IOException(LanguageManager.get("error.extension.script_path_invalid", "path script tidak valid"));
         String[] parts = value.split("/");
         for (int i = 0; i < parts.length; i++) {
-            if ("..".equals(parts[i]) || ".".equals(parts[i]) || parts[i].length() == 0) throw new IOException("path script tidak valid");
+            if ("..".equals(parts[i]) || ".".equals(parts[i]) || parts[i].length() == 0) throw new IOException(LanguageManager.get("error.extension.script_path_invalid", "path script tidak valid"));
         }
         return value;
     }
 
     private static String normalizeZipPath(String path) throws IOException {
-        if (path == null) throw new IOException("entri zip tanpa nama");
+        if (path == null) throw new IOException(LanguageManager.get("error.extension.zip_entry_empty", "entri zip tanpa nama"));
         String value = path.replace('\\', '/');
-        if (value.startsWith("/") || value.startsWith("~")) throw new IOException("path absolut tidak diizinkan");
+        if (value.startsWith("/") || value.startsWith("~")) throw new IOException(LanguageManager.get("error.extension.absolute_path", "path absolut tidak diizinkan"));
         String[] parts = value.split("/");
         for (int i = 0; i < parts.length; i++) {
-            if ("..".equals(parts[i]) || ".".equals(parts[i])) throw new IOException("path traversal ditolak");
+            if ("..".equals(parts[i]) || ".".equals(parts[i])) throw new IOException(LanguageManager.get("error.extension.path_traversal", "path traversal ditolak"));
         }
         while (value.startsWith("./")) value = value.substring(2);
         return value;
@@ -571,7 +571,7 @@ public class ExtensionManager {
         String relative = validateRelativePath(relativePath);
         File file = new File(base, relative);
         String basePath = base.getCanonicalPath() + File.separator;
-        if (!file.getCanonicalPath().startsWith(basePath)) throw new IOException("path keluar dari direktori extension");
+        if (!file.getCanonicalPath().startsWith(basePath)) throw new IOException(LanguageManager.get("error.extension.path_outside", "path keluar dari direktori extension"));
         return file;
     }
 
@@ -581,7 +581,7 @@ public class ExtensionManager {
     }
 
     private static String readFile(File file, int maxBytes) throws IOException {
-        if (!file.isFile()) throw new IOException("file tidak ditemukan: " + file.getName());
+        if (!file.isFile()) throw new IOException(LanguageManager.format("error.extension.file_not_found", "file tidak ditemukan: %1$s", file.getName()));
         FileInputStream input = new FileInputStream(file);
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
@@ -591,7 +591,7 @@ public class ExtensionManager {
             total += read;
             if (total > maxBytes) {
                 input.close();
-                throw new IOException("file terlalu besar");
+                throw new IOException(LanguageManager.get("error.extension.read_too_large", "file terlalu besar"));
             }
             output.write(buffer, 0, read);
         }

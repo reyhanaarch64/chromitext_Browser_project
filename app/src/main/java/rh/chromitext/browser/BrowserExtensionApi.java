@@ -120,7 +120,7 @@ public class BrowserExtensionApi {
         log("user-agent rule ditambahkan: " + domain);
     }
 
-    public void injectScriptForDomain(String domain, String relativeScriptPath) throws IOException {
+    public void injectScriptForDomain(String domain, String relativeScriptPath) throws java.io.IOException {
         requirePermission("scripting");
         checkDomainText(domain);
         String path = validateRelativePath(relativeScriptPath);
