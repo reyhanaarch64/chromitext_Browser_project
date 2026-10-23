@@ -1,6 +1,6 @@
 # Chromitext
 
-<p align="center"><a href="#english">English</a> | <a href="#bahasa-indonesia">Bahasa Indonesia</a></p>
+<p align="center"><a href="#english">English</a> | <a href="#bahasa-indonesia">Bahasa Indonesia</a> | <a href="#contact">Contact</a></p>
 
 ## English
 
@@ -208,4 +208,23 @@ Saat membuat ZIP extension, pastikan `manifest.json` berada langsung di root ars
 3. Penghapusan cookie per domain bersifat best-effort, karena cookie bisa memakai Path/Domain khusus.
 4. Permission Android tetap menentukan akses perangkat, meskipun website sudah meminta izin lewat WebView.
 
-[Kembali ke atas](#chromitext)
+
+---
+
+## Contact
+
+For questions, feedback, collaboration or bug reports, please get in touch through any of the channels below. Bug reports and feature requests may also be submitted through GitHub Issues.
+
+Untuk pertanyaan, masukan, kolaborasi, atau laporan bug, silakan hubungi melalui kanal berikut. Laporan bug dan permintaan fitur juga dapat disampaikan melalui GitHub Issues.
+
+- **Developer:** Reyhan Ardiansah
+- **Instagram:** [@rhnardiansh_](https://www.instagram.com/rhnardiansh_)
+- **TikTok:** [@rhnardiansh_](https://www.tiktok.com/@rhnardiansh_)
+- **Email:** [nurkhalifah0099@gmail.com](mailto:nurkhalifah0099@gmail.com)
+- **Donation / Donasi:** [SociaBuzz](https://sociabuzz.com/rhnardiansh/tribe)
+
+If you find this project useful, you are welcome to support its development through the link above. Donations are entirely voluntary.
+
+Jika proyek ini bermanfaat bagi Anda, dukungan terhadap pengembangannya dapat disampaikan melalui tautan di atas. Donasi bersifat sukarela.
+
+[Back to top / Kembali ke atas](#chromitext)
